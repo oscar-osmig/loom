@@ -1,1 +1,13 @@
 .claude
+.idea/
+__pycache__/
+*.pyc
+*.bak
+nul
+inspiration.png
+concept.txt
+concept_example.py
+research.txt
+training_guide.txt
+RESEARCH_ENHANCEMENTS.md
+loom_memory.json
