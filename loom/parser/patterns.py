@@ -27,8 +27,13 @@ from .patterns_relations import (
 
 # Discourse patterns
 from .patterns_discourse import (
+    _check_implicit_continuation,
+    _check_list_learning,
+    _check_pronoun_reference,
     _check_discourse_patterns,
     _learn_from_conversation,
+    _check_first_person_statement,
+    _check_chit_chat,
 )
 
 # Export all pattern functions
@@ -44,6 +49,11 @@ __all__ = [
     "_check_becomes_pattern",
     "_check_is_statement",
     # Discourse patterns
+    "_check_implicit_continuation",
+    "_check_list_learning",
+    "_check_pronoun_reference",
     "_check_discourse_patterns",
     "_learn_from_conversation",
+    "_check_first_person_statement",
+    "_check_chit_chat",
 ]

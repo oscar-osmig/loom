@@ -8,6 +8,20 @@ from ..grammar import is_plural
 from .constants import COLORS
 
 
+def _strip_leading_connector(text: str) -> str:
+    """Strip leading discourse connectors like 'but', 'however', 'also' from text."""
+    connectors = [
+        'but ', 'however ', 'although ', 'though ', 'yet ',
+        'also ', 'and ', 'so ', 'therefore ', 'thus ',
+        'nevertheless ', 'nonetheless ', 'instead ', 'rather ',
+    ]
+    text_lower = text.lower()
+    for conn in connectors:
+        if text_lower.startswith(conn):
+            return text[len(conn):]
+    return text
+
+
 def _check_negation(parser, t: str) -> str | None:
     """Handle 'X is not Y' or 'X doesn't have Y' patterns."""
     # Don't match questions - let query handlers process them
@@ -18,6 +32,22 @@ def _check_negation(parser, t: str) -> str | None:
     # These should be handled by _check_is_statement
     if " that cannot " in t or " that can't " in t or " that can " in t:
         return None
+
+    # Strip leading connector (e.g., "but sharks..." -> "sharks...")
+    t_clean = _strip_leading_connector(t)
+
+    # "X are Y, not Z" or "X is Y, not Z" - creates TWO facts: is(Y) and is_not(Z)
+    # Example: "sharks are fish, not mammals" -> sharks is fish, sharks is_not mammals
+    match = re.match(r"(.+?)\s+(?:is|are)\s+(.+?),\s*(?:not|but not)\s+(.+)", t_clean)
+    if match:
+        subj, pos_obj, neg_obj = match.groups()
+        subj = subj.strip()
+        pos_obj = pos_obj.strip()
+        neg_obj = neg_obj.strip().rstrip('.')
+        parser.loom.add_fact(subj, "is", pos_obj)
+        parser.loom.add_fact(subj, "is_not", neg_obj)
+        verb = "are" if is_plural(subj) else "is"
+        return f"Got it, {subj} {verb} {pos_obj}, not {neg_obj}."
 
     # "X is not Y" / "X are not Y"
     match = re.match(r"(.+?)\s+(?:is|are)\s+not\s+(.+)", t)
@@ -46,11 +76,20 @@ def _check_negation(parser, t: str) -> str | None:
 
 
 def _check_looks_pattern(parser, t: str) -> str | None:
-    """Handle 'X looks like Y' or 'X looks [color]' patterns."""
-    if " looks " not in t:
+    """Handle 'X looks/look like Y' or 'X looks [color]' patterns."""
+    from ..normalizer import resolve_possessive
+
+    # Handle both "looks" (singular) and "look" (plural)
+    split_pattern = None
+    if " looks " in t:
+        split_pattern = " looks "
+    elif " look " in t:
+        split_pattern = " look "
+
+    if not split_pattern:
         return None
 
-    parts = t.split(" looks ", 1)
+    parts = t.split(split_pattern, 1)
     if len(parts) != 2:
         return None
 
@@ -59,14 +98,19 @@ def _check_looks_pattern(parser, t: str) -> str | None:
 
     if rest.startswith("like "):
         y = rest[5:].strip()
-        parser.loom.add_fact(subj, "looks_like", y)
+        # Resolve possessive references
+        subj_resolved = resolve_possessive(subj, parser.loom.knowledge)
+        y_resolved = resolve_possessive(y, parser.loom.knowledge)
+        parser.loom.add_fact(subj_resolved, "looks_like", y_resolved)
         # Copy properties BOTH directions
-        parser.loom.copy_properties(subj, y)  # y -> subj
-        parser.loom.copy_properties(y, subj)  # subj -> y
-        return f"Got it, {subj} looks like {y}."
+        parser.loom.copy_properties(subj_resolved, y_resolved)
+        parser.loom.copy_properties(y_resolved, subj_resolved)
+        verb = "look" if split_pattern == " look " else "looks"
+        return f"Got it, {subj} {verb} like {y}."
 
     if rest in COLORS:
-        parser.loom.add_fact(subj, "color", rest)
+        subj_resolved = resolve_possessive(subj, parser.loom.knowledge)
+        parser.loom.add_fact(subj_resolved, "color", rest)
         return f"Got it, {subj} is {rest}."
 
     return None
@@ -74,12 +118,15 @@ def _check_looks_pattern(parser, t: str) -> str | None:
 
 def _check_analogy_pattern(parser, t: str) -> str | None:
     """Handle 'X is/are like Y' patterns."""
+    from ..normalizer import resolve_possessive
+
     like_patterns = [" is like ", " are like "]
     for pattern in like_patterns:
         if pattern in t:
             parts = t.split(pattern, 1)
             if len(parts) == 2:
-                x, y = parts[0].strip(), parts[1].strip()
+                x_original, y_original = parts[0].strip(), parts[1].strip()
+                x, y = x_original, y_original
                 for prefix in ["you know ", "well ", "so ", "the ", "a ", "an "]:
                     if x.startswith(prefix):
                         x = x[len(prefix):]
@@ -100,10 +147,15 @@ def _check_analogy_pattern(parser, t: str) -> str | None:
                         parser.loom.copy_properties(y, source)
                         return f"I'll remember {source} and {y} are similar."
 
-                parser.loom.add_fact(x, "looks_like", y)
+                # Resolve possessive references to existing properties
+                # "loom's eyes" -> "blue_eyes" (if loom has blue_eyes)
+                x_resolved = resolve_possessive(x, parser.loom.knowledge)
+                y_resolved = resolve_possessive(y, parser.loom.knowledge)
+
+                parser.loom.add_fact(x_resolved, "looks_like", y_resolved)
                 # Copy properties BOTH directions for analogies
-                parser.loom.copy_properties(x, y)  # y -> x
-                parser.loom.copy_properties(y, x)  # x -> y
+                parser.loom.copy_properties(x_resolved, y_resolved)  # y -> x
+                parser.loom.copy_properties(y_resolved, x_resolved)  # x -> y
                 verb = "are" if is_plural(x) else "is"
                 return f"I see, {x} {verb} like {y}."
     return None

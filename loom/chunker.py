@@ -87,11 +87,16 @@ class TextChunker:
     # Sentence ending patterns
     SENTENCE_ENDINGS = re.compile(r'(?<=[.!?])\s+(?=[A-Z])')
 
-    # Clause separators
+    # Clause separators (including contrast words without comma)
     CLAUSE_SEPARATORS = [
         ', and ', ', but ', ', or ', ', so ', ', yet ',
         '; ', ' - ', ' — ',
-        ', which ', ', who ', ', that ', ', where ', ', when '
+        ', which ', ', who ', ', that ', ', where ', ', when ',
+        # Contrast words that split clauses even without comma
+        ' but ', ' however ', ' although ', ' though ', ' whereas ',
+        ' yet ', ' nevertheless ', ' nonetheless ', ' instead ',
+        # Causal words
+        ' because ', ' since ', ' therefore ', ' thus ',
     ]
 
     def __init__(self):
@@ -187,6 +192,50 @@ class TextChunker:
 
     def split_clauses(self, sentence: str) -> List[str]:
         """Split a sentence into clauses."""
+        # Don't split list patterns like "X, Y, and Z are/is W"
+        # or "X, Y, and Z have/need/can W"
+        list_pattern = re.match(
+            r'^[^,]+,\s*[^,]+,?\s+and\s+\w+\s+(are|is|have|has|need|needs|can|could)\s+',
+            sentence, re.IGNORECASE
+        )
+        if list_pattern:
+            return [sentence]  # Don't split list sentences
+
+        # Don't split patterns like "They/Subject verb X, Y, and Z"
+        # where the list comes AFTER the verb
+        verb_list_pattern = re.search(
+            r'\b(eat|eats|drink|drinks|have|has|need|needs|make|makes|use|uses|like|likes|want|wants)\s+\w+,\s*\w+,?\s+and\s+\w+',
+            sentence, re.IGNORECASE
+        )
+        if verb_list_pattern:
+            return [sentence]  # Don't split sentences with verb followed by list
+
+        # Don't split descriptive lists like "variety of X, Y, and Z" or "come in X, Y, and Z"
+        # where content continues after the list
+        descriptive_list = re.search(
+            r'\b(variety|range|types?|kinds?|forms?|array)\s+of\s+[\w\s,]+,\s*and\s+\w+',
+            sentence, re.IGNORECASE
+        )
+        if descriptive_list:
+            return [sentence]  # Don't split descriptive list sentences
+
+        # Don't split "including X, Y, and Z" or "such as X, Y, and Z" patterns
+        including_list = re.search(
+            r'\b(including|such\s+as|like)\s+[\w\s]+,\s*[\w\s]+,?\s*and\s+[\w\s]+',
+            sentence, re.IGNORECASE
+        )
+        if including_list:
+            return [sentence]  # Don't split including/such as lists
+
+        # Don't split ", and " when it's part of a list (multiple commas before "and")
+        # Count commas before ", and " vs total sentence structure
+        and_match = re.search(r',\s*and\s+', sentence)
+        if and_match:
+            before_and = sentence[:and_match.start()]
+            # If there are 2+ commas before ", and", it's likely a list
+            if before_and.count(',') >= 2:
+                return [sentence]
+
         clauses = [sentence]
 
         for separator in self.CLAUSE_SEPARATORS:

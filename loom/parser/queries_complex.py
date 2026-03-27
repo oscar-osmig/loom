@@ -79,39 +79,78 @@ def _check_can_query(parser, t: str) -> str | None:
     match = re.match(r"what can\s+(.+?)\s+do", t)
     if match:
         subj = match.group(1)
-        abilities = parser.loom.get(subj, "can")
+        # Use _try_get to handle singular/plural variations
+        abilities = parser._try_get(subj, "can")
         if abilities:
             # Replace underscores for display
             display = [a.replace("_", " ") for a in abilities]
             return f"{subj.title()} can {format_list(display)}."
         else:
             # Check for cannot
-            cannot = parser.loom.get(subj, "cannot")
+            cannot = parser._try_get(subj, "cannot")
             if cannot:
                 display = [a.replace("_", " ") for a in cannot]
                 return f"I know {subj} cannot {format_list(display)}."
             parser.loom.add_fact(subj, "has_open_question", "abilities")
             return f"I don't know what {subj} can do yet."
 
+    # "can X use/do Y?" pattern - e.g., "can dolphins use echolocation?"
+    match = re.match(r"can\s+(.+?)\s+(use|do|make|eat|have)\s+(.+)", t)
+    if match:
+        subj, verb, obj = match.groups()
+        obj = obj.strip().rstrip("?.")
+
+        # Map verb to relation
+        verb_to_rel = {
+            "use": "uses",
+            "do": "can",
+            "make": "makes",
+            "eat": "eats",
+            "have": "has"
+        }
+        relation = verb_to_rel.get(verb, "can")
+
+        # Check the specific relation
+        facts = parser._try_get(subj, relation)
+        obj_norm = normalize(obj)
+        verb_form = verb if is_plural(subj) else verb + "s"
+        for fact in facts:
+            if obj_norm in normalize(fact) or normalize(fact) in obj_norm:
+                return f"Yes, {subj} {verb_form} {obj}."
+
+        # Also check "can" relation for abilities
+        abilities = parser._try_get(subj, "can")
+        for ability in abilities:
+            if obj_norm in normalize(ability) or verb in normalize(ability):
+                return f"Yes, {subj} can {ability.replace('_', ' ')}."
+
+        return f"I don't know if {subj} {verb}s {obj}."
+
     # "can X do Y?" or "can X Y?"
     match = re.match(r"can\s+(.+?)\s+(\w+)(?:\s|$)", t)
     if match:
         subj, action = match.groups()
 
-        # First check "cannot"
-        cannot = parser.loom.get(subj, "cannot") or []
+        # First check "cannot" - use _try_get for singular/plural
+        cannot = parser._try_get(subj, "cannot")
         for inability in cannot:
             if action in inability or inability.startswith(action):
                 return f"No, {subj} cannot {inability.replace('_', ' ')}."
 
-        # Then check "can"
-        abilities = parser.loom.get(subj, "can") or []
+        # Then check "can" - use _try_get for singular/plural
+        abilities = parser._try_get(subj, "can")
         if abilities:
             for ability in abilities:
                 if action in ability or ability.startswith(action):
                     return f"Yes, {subj} can {ability.replace('_', ' ')}."
             abilities_display = [a.replace('_', ' ') for a in abilities]
             return f"I know {subj} can {format_list(abilities_display)}, but I'm not sure about {action}."
+
+        # Also check "uses" relation for "use" action
+        if action == "use":
+            uses = parser._try_get(subj, "uses")
+            if uses:
+                return f"Yes, {subj} uses {format_list(uses)}."
 
         # Neither can nor cannot found
         parser.loom.add_fact(subj, "has_open_question", "abilities")
@@ -122,8 +161,9 @@ def _check_can_query(parser, t: str) -> str | None:
 
 def _check_are_is_query(parser, t: str) -> str | None:
     """Handle 'are X Y?' or 'is X Y?' queries."""
-    # Match "are cats hunters" or "is the sky blue"
-    match = re.match(r"(?:are|is)\s+(.+?)\s+(\w+)$", t)
+    # Match "are cats hunters" or "is the sky blue" or "are dolphins warm-blooded"
+    # Use [\w-]+ to match hyphenated words like "warm-blooded"
+    match = re.match(r"(?:are|is)\s+(.+?)\s+([\w-]+)$", t)
     if not match:
         return None
 
@@ -143,11 +183,45 @@ def _check_are_is_query(parser, t: str) -> str | None:
     obj_norm = normalize(obj)
     verb = "are" if is_plural(subj) else "is"
 
-    # Check if subj is obj (category)
-    facts = parser.loom.get(subj, "is") or []
+    # Check if subj is obj (category) - direct facts
+    facts = parser._try_get(subj, "is") or []
     for fact in facts:
         if obj_norm in normalize(fact) or normalize(fact) in obj_norm:
             return f"Yes, {subj} {verb} {obj}."
+
+    # Also check if obj is a substring of any fact (for compound categories)
+    # e.g., "buses" is "public_transportation" should match "vehicles" if we know
+    # "transportation" or "public_transportation" is a type of "vehicle"
+    for fact in facts:
+        # Check if the queried obj appears anywhere in the fact
+        fact_words = normalize(fact).replace("_", " ").split()
+        if obj_norm in fact_words:
+            return f"Yes, {subj} {verb} {obj} ({fact.replace('_', ' ')})."
+
+    # Check transitive chain: subj -> X -> Y -> obj
+    # Example: dolphins -> mammals -> warm-blooded
+    if hasattr(parser.loom, 'inference'):
+        chain = parser.loom.inference.transitive_chain(subj, "is")
+        for target, depth in chain:
+            target_norm = normalize(target)
+            if obj_norm in target_norm or target_norm in obj_norm:
+                # Found through transitive chain - explain the reasoning
+                if depth == 1:
+                    return f"Yes, {subj} {verb} {obj}."
+                else:
+                    # Get intermediate step for explanation
+                    direct = parser.loom.get(subj, "is") or []
+                    if direct:
+                        intermediate = direct[0].replace("_", " ")
+                        return f"Yes, {subj} {verb} {obj} (because {subj} {verb} {intermediate})."
+                    return f"Yes, {subj} {verb} {obj}."
+
+        # Also check if obj has properties that match through inheritance
+        for target, depth in chain:
+            target_props = parser.loom.get(target, "has_property") or []
+            for prop in target_props:
+                if obj_norm in normalize(prop) or normalize(prop) in obj_norm:
+                    return f"Yes, {subj} {verb} {obj} (inherited from {target.replace('_', ' ')})."
 
     # Check has_property relation (for adjectives like "intelligent", "dangerous")
     properties = parser.loom.get(subj, "has_property") or []
@@ -188,15 +262,42 @@ def _check_are_is_query(parser, t: str) -> str | None:
 
 
 def _check_why_query(parser, t: str) -> str | None:
-    """Handle 'why does X happen?' or 'why X need Y?' queries."""
+    """Handle 'why does X happen?' or 'why X need Y?' or 'why X verb Y?' queries."""
     if not t.startswith("why"):
         return None
+
+    # Pattern: "why do X produce/have/verb Y" - general verb pattern
+    verb_match = re.match(r"why (?:do |does )?(.+?)\s+(produce|produces|have|has|need|needs|use|uses|are|is)\s+(.+)", t)
+    if verb_match:
+        subj = verb_match.group(1).strip()
+        verb = verb_match.group(2).strip()
+        obj = verb_match.group(3).strip()
+
+        # Check if we have a "because" relation stored for this subject
+        reasons = parser._try_get(subj, "because")
+        if reasons:
+            reason = reasons[0].replace("_", " ")
+            return f"Because {reason}."
+
+        # Check properties for indirect reasoning
+        properties = parser._try_get(subj, "has_property")
+        if properties:
+            prop = properties[0].replace("_", " ")
+            return f"Because {subj} are {prop}."
+
+        return f"I don't know why {subj} {verb} {obj}."
 
     # Pattern: "why X need/needs Y" or "why do X need Y"
     need_match = re.match(r"why (?:do |does )?(\w+) (?:need|needs?) (.+)", t)
     if need_match:
         subj = need_match.group(1).strip()
         needed_thing = need_match.group(2).strip()
+
+        # Check if we have a stored reason
+        reasons = parser._try_get(subj, "because")
+        if reasons:
+            reason = reasons[0].replace("_", " ")
+            return f"Because {reason}."
 
         # Check if we know what this subject needs
         needs = parser.loom.get(subj, "needs") or []
@@ -218,6 +319,20 @@ def _check_why_query(parser, t: str) -> str | None:
 
         return f"I don't know why {subj} need {needed_thing}."
 
+    # Pattern: "why are X Y" - asking about properties
+    are_match = re.match(r"why (?:is|are) (.+?)\s+(.+)", t)
+    if are_match:
+        subj = are_match.group(1).strip()
+        prop = are_match.group(2).strip()
+
+        # Check for stored reason
+        reasons = parser._try_get(subj, "because")
+        if reasons:
+            reason = reasons[0].replace("_", " ")
+            return f"Because {reason}."
+
+        return f"I don't know why {subj} are {prop}."
+
     # Extract what we're asking about
     subj = re.sub(r"why (do|does|is|are|did)?\s*", "", t).strip()
     subj = re.sub(r"\s*(happen|occur|exist).*", "", subj).strip()
@@ -228,6 +343,12 @@ def _check_why_query(parser, t: str) -> str | None:
     # Track subject for pronoun resolution
     parser.last_subject = subj
     parser.loom.context.update(subject=subj)
+
+    # Check for stored reason on the subject
+    reasons = parser._try_get(subj, "because")
+    if reasons:
+        reason = reasons[0].replace("_", " ")
+        return f"Because {reason}."
 
     # Look for causes (reverse lookup)
     # Check if anything causes this subject
@@ -437,7 +558,7 @@ def _check_difference_query(parser, t: str) -> str | None:
 
     differences = []
 
-    # Compare has_property (try singular/plural)
+    # Compare has_property (try singular/plural) - these are true differences
     props1 = parser._try_get(subj1, "has_property")
     props2 = parser._try_get(subj2, "has_property")
     for p in props1:
@@ -447,15 +568,17 @@ def _check_difference_query(parser, t: str) -> str | None:
         if p not in props1:
             differences.append(f"{subj2} are {p.replace('_', ' ')}")
 
-    # Compare has
+    # Compare has - only if BOTH entities have "has" data to avoid false differences
+    # (e.g., "dogs have legs" vs cats having no "has" data doesn't mean cats don't have legs)
     has1 = parser._try_get(subj1, "has")
     has2 = parser._try_get(subj2, "has")
-    for h in has1:
-        if h not in has2:
-            differences.append(f"{subj1} have {h.replace('_', ' ')}")
-    for h in has2:
-        if h not in has1:
-            differences.append(f"{subj2} have {h.replace('_', ' ')}")
+    if has1 and has2:  # Only compare when both have explicit data
+        for h in has1:
+            if h not in has2:
+                differences.append(f"{subj1} have {h.replace('_', ' ')}")
+        for h in has2:
+            if h not in has1:
+                differences.append(f"{subj2} have {h.replace('_', ' ')}")
 
     # Compare produces
     prod1 = parser._try_get(subj1, "produces")
@@ -485,3 +608,465 @@ def _check_difference_query(parser, t: str) -> str | None:
         return f"Differences: {'; '.join(differences[:4])}."
     else:
         return f"I don't know the differences between {subj1} and {subj2}."
+
+
+def _check_food_for_query(parser, t: str) -> str | None:
+    """Handle 'what is food for X?' queries."""
+    # Pattern: "what is food for X" or "what are food for X"
+    match = re.match(r"what\s+(?:is|are)\s+food\s+for\s+(.+)", t)
+    if not match:
+        return None
+
+    target = match.group(1).strip().rstrip("?")
+    target_norm = normalize(target)
+
+    # Find entities that have food_for relation to target
+    results = []
+    for node, relations in parser.loom.knowledge.items():
+        if "food_for" in relations:
+            for food_target in relations["food_for"]:
+                if normalize(food_target) == target_norm or target_norm in normalize(food_target):
+                    results.append(prettify(node))
+                    break
+
+    if results:
+        if len(results) == 1:
+            return f"{results[0].title()} is food for {target}."
+        else:
+            return f"{format_list([r.title() for r in results])} are food for {target}."
+    else:
+        return f"I don't know what is food for {target}."
+
+
+def _check_protects_query(parser, t: str) -> str | None:
+    """Handle 'what protects X?' queries."""
+    # Pattern: "what protects X"
+    match = re.match(r"what\s+protects\s+(.+)", t)
+    if not match:
+        return None
+
+    target = match.group(1).strip().rstrip("?")
+    target_norm = normalize(target)
+
+    # Find entities that protect the target (reverse lookup via protected_by)
+    results = []
+
+    # First check if target has a protected_by relation
+    protected_by = parser._try_get(target, "protected_by")
+    if protected_by:
+        results.extend([prettify(p) for p in protected_by])
+
+    # Also check for entities that have "protects" relation to target
+    for node, relations in parser.loom.knowledge.items():
+        if "protects" in relations:
+            for protectee in relations["protects"]:
+                if normalize(protectee) == target_norm or target_norm in normalize(protectee):
+                    results.append(prettify(node))
+                    break
+
+    if results:
+        # Remove duplicates
+        results = list(set(results))
+        if len(results) == 1:
+            verb = "protect" if is_plural(results[0]) else "protects"
+            return f"{results[0].title()} {verb} {target}."
+        else:
+            return f"{format_list([r.title() for r in results])} protect {target}."
+    else:
+        return f"I don't know what protects {target}."
+
+
+def _check_where_lay_eggs_query(parser, t: str) -> str | None:
+    """Handle 'where do X lay eggs?' queries."""
+    # Pattern: "where do X lay eggs" or "where does X lay eggs"
+    match = re.match(r"where\s+(?:do|does)\s+(.+?)\s+lay\s+eggs", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Find where the subject lays eggs
+    locations = parser._try_get(subject, "lays_eggs_on")
+    if not locations:
+        locations = parser._try_get(subject, "lays_eggs_in")
+
+    if locations:
+        loc_str = format_list([prettify(loc) for loc in locations])
+        return f"{subject.title()} lay eggs on {loc_str}."
+    else:
+        return f"I don't know where {subject} lay eggs."
+
+
+def _check_threatened_by_query(parser, t: str) -> str | None:
+    """Handle 'what threatens X?' or 'what is X threatened by?' queries."""
+    # Pattern: "what threatens X"
+    match = re.match(r"what\s+threatens\s+(.+)", t)
+    if not match:
+        # Pattern: "what is/are X threatened by"
+        match = re.match(r"what\s+(?:is|are)\s+(.+?)\s+threatened\s+by", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip().rstrip("?")
+
+    # Find threats
+    threats = parser._try_get(subject, "threatened_by")
+
+    if threats:
+        threat_str = format_list([prettify(t) for t in threats])
+        verb = "are" if is_plural(subject) else "is"
+        return f"{subject.title()} {verb} threatened by {threat_str}."
+    else:
+        return f"I don't know what threatens {subject}."
+
+
+def _check_how_communicate_query(parser, t: str) -> str | None:
+    """Handle 'how do X communicate?' queries."""
+    match = re.match(r"how\s+(?:do|does)\s+(.+?)\s+communicate", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check communicates_using relation
+    methods = parser._try_get(subject, "communicates_using")
+    if methods:
+        method_str = format_list([prettify(m) for m in methods])
+        verb = "communicate" if is_plural(subject) else "communicates"
+        return f"{subject.title()} {verb} using {method_str}."
+
+    return None
+
+
+def _check_what_detect_query(parser, t: str) -> str | None:
+    """Handle 'what can X detect?' queries."""
+    match = re.match(r"what\s+can\s+(.+?)\s+detect", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check can_detect relation first
+    detects = parser._try_get(subject, "can_detect")
+    if detects:
+        detect_str = format_list([prettify(d) for d in detects])
+        return f"{subject.title()} can detect {detect_str}."
+
+    # Also check "can" relation for "detect_X" patterns
+    can_abilities = parser._try_get(subject, "can")
+    for ability in can_abilities:
+        if ability.startswith("detect"):
+            # Extract what they detect: "detect_blood" -> "blood"
+            detected = ability.replace("detect_", "").replace("detect", "").strip("_")
+            if detected:
+                return f"{subject.title()} can detect {prettify(detected)}."
+
+    return None
+
+
+def _check_what_provide_query(parser, t: str) -> str | None:
+    """Handle 'what do X provide?' queries."""
+    match = re.match(r"what\s+(?:do|does)\s+(.+?)\s+provide", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check provides relation
+    provides = parser._try_get(subject, "provides")
+    if provides:
+        provide_str = format_list([prettify(p) for p in provides])
+        verb = "provide" if is_plural(subject) else "provides"
+        return f"{subject.title()} {verb} {provide_str}."
+
+    return None
+
+
+def _check_how_many_query(parser, t: str) -> str | None:
+    """Handle 'how many X do Y have?' queries."""
+    match = re.match(r"how\s+many\s+(\w+)\s+(?:do|does)\s+(.+?)\s+have", t)
+    if not match:
+        return None
+
+    item = match.group(1).strip()  # e.g., "hearts"
+    subject = match.group(2).strip()  # e.g., "octopuses"
+
+    # Check has relation for items containing the number
+    has_items = parser._try_get(subject, "has")
+    for h in has_items:
+        h_lower = h.lower().replace("_", " ")
+        if item.rstrip("s") in h_lower or item in h_lower:
+            return f"{subject.title()} have {prettify(h)}."
+
+    return None
+
+
+def _check_related_to_query(parser, t: str) -> str | None:
+    """Handle 'what are X related to?' queries."""
+    match = re.match(r"what\s+(?:is|are)\s+(.+?)\s+related\s+to", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check related_to relation
+    related = parser._try_get(subject, "related_to")
+    if related:
+        related_str = format_list([prettify(r) for r in related])
+        verb = "are" if is_plural(subject) else "is"
+        return f"{subject.title()} {verb} related to {related_str}."
+
+    return None
+
+
+def _check_what_regenerate_query(parser, t: str) -> str | None:
+    """Handle 'what can X regenerate?' queries."""
+    match = re.match(r"what\s+can\s+(.+?)\s+regenerate", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check can_regenerate relation first
+    regenerates = parser._try_get(subject, "can_regenerate")
+    if regenerates:
+        regen_str = format_list([prettify(r) for r in regenerates])
+        return f"{subject.title()} can regenerate {regen_str}."
+
+    # Also check "can" relation for "regenerate_X" patterns
+    can_abilities = parser._try_get(subject, "can")
+    for ability in can_abilities:
+        if "regenerate" in ability:
+            # Extract what they regenerate: "regenerate_lost_limb" -> "lost limb"
+            regenerated = ability.replace("regenerate_", "").replace("regenerate", "").strip("_")
+            if regenerated:
+                return f"{subject.title()} can regenerate {prettify(regenerated)}."
+
+    return None
+
+
+def _check_immune_to_query(parser, t: str) -> str | None:
+    """Handle 'what are X immune to?' queries."""
+    match = re.match(r"what\s+(?:is|are)\s+(.+?)\s+immune\s+to", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip()
+
+    # Check immune_to relation
+    immune = parser._try_get(subject, "immune_to")
+    if immune:
+        immune_str = format_list([prettify(i) for i in immune])
+        verb = "are" if is_plural(subject) else "is"
+        return f"{subject.title()} {verb} immune to {immune_str}."
+
+    return None
+
+
+def _check_superlative_reverse_query(parser, t: str) -> str | None:
+    """Handle 'what are the largest/smallest/base of X?' queries (reverse lookup)."""
+    # Pattern: "what are the [superlative] [category]"
+    match = re.match(r"what\s+(?:is|are)\s+the\s+(\w+)\s+(.+)", t)
+    if not match:
+        return None
+
+    descriptor = match.group(1).strip()  # e.g., "largest", "base"
+    category = match.group(2).strip()  # e.g., "animals on earth", "ocean food chain"
+
+    # Normalize the full phrase
+    search_phrase = f"{descriptor}_{normalize(category)}"
+
+    # Search for entities that have this as their "is" value
+    results = []
+    for node, relations in parser.loom.knowledge.items():
+        if node == "self":
+            continue
+        if "is" in relations:
+            for is_val in relations["is"]:
+                # Check if normalized values match
+                if normalize(is_val) == search_phrase or search_phrase in normalize(is_val):
+                    results.append(prettify(node))
+                    break
+
+    if results:
+        result_str = format_list([r.title() for r in results])
+        # Check if the result is plural
+        first_result = results[0] if results else ""
+        verb = "are" if len(results) > 1 or is_plural(first_result) else "is"
+        return f"{result_str} {verb} the {descriptor} {category}."
+
+    return None
+
+
+def _check_how_long_query(parser, t: str) -> str | None:
+    """Handle 'how long/big/tall can X grow/be?' queries."""
+    # Pattern: "how long can X grow" or "how big can X get"
+    match = re.match(r"how\s+(long|big|tall|large|fast)\s+(?:can|do|does)\s+(.+?)\s+(grow|get|be|run|swim|fly)", t)
+    if not match:
+        return None
+
+    measurement_type = match.group(1).strip()  # e.g., "long"
+    subject = match.group(2).strip()  # e.g., "blue whales"
+    verb = match.group(3).strip()  # e.g., "grow"
+
+    # Check "can" relation for grow/be patterns with measurements
+    can_abilities = parser._try_get(subject, "can")
+    for ability in can_abilities:
+        ability_lower = ability.lower()
+        # Look for "grow_up_to_X" or similar patterns
+        if verb in ability_lower or "up_to" in ability_lower:
+            # Extract the measurement: "grow_up_to_100_feet_long" -> "up to 100 feet long"
+            pretty = prettify(ability)
+            return f"{subject.title()} can {pretty}."
+
+    # Check "has_property" for size/length info
+    properties = parser._try_get(subject, "has_property")
+    for prop in properties:
+        if measurement_type in prop.lower() or "feet" in prop.lower() or "meter" in prop.lower():
+            return f"{subject.title()} are {prettify(prop)}."
+
+    return None
+
+
+# ==================== TEMPORAL QUERIES ====================
+
+def _check_temporal_query(parser, t: str) -> str | None:
+    """
+    Handle temporal queries like:
+    - "what do snakes do in winter?"
+    - "when do birds migrate?"
+    - "what did X do?"
+    - "what happens in spring?"
+    """
+    # Pattern 1: "what do/does X do in [season/time]?"
+    match = re.match(r"what\s+(?:do|does)\s+(.+?)\s+do\s+in\s+(?:the\s+)?(\w+)", t)
+    if match:
+        subject = match.group(1).strip()
+        time_period = match.group(2).strip().lower()
+
+        # Map seasons/times to search terms
+        time_keywords = {
+            "winter": ["hibernate", "winter", "cold"],
+            "summer": ["summer", "warm", "hot"],
+            "spring": ["spawn", "spring", "bloom", "nest"],
+            "autumn": ["migrate", "fall", "autumn"],
+            "fall": ["migrate", "fall", "autumn"],
+            "night": ["nocturnal", "night", "hunt"],
+            "day": ["diurnal", "day"],
+        }
+
+        search_terms = time_keywords.get(time_period, [time_period])
+
+        # Search for facts containing these time keywords
+        subj_facts = parser.loom.knowledge.get(normalize(subject), {})
+        matches = []
+
+        for rel, values in subj_facts.items():
+            for val in values:
+                val_lower = val.lower()
+                for term in search_terms:
+                    if term in val_lower:
+                        matches.append((rel, val))
+                        break
+
+        if matches:
+            results = []
+            for rel, val in matches:
+                verb = rel.replace("_", " ")
+                results.append(f"{verb} {prettify(val)}")
+
+            verb = "do" if is_plural(subject) else "does"
+            return f"In {time_period}, {subject} {', '.join(results)}."
+
+        return f"I don't know what {subject} do in {time_period}."
+
+    # Pattern 2: "when do/does X [verb]?"
+    match = re.match(r"when\s+(?:do|does)\s+(.+?)\s+(\w+)", t)
+    if match:
+        subject = match.group(1).strip()
+        action = match.group(2).strip().lower()
+
+        # Search for facts about the subject doing this action
+        subj_facts = parser.loom.knowledge.get(normalize(subject), {})
+
+        # Check various relations
+        for rel in ["can", "does", action, f"{action}s"]:
+            values = subj_facts.get(rel, [])
+            for val in values:
+                val_lower = val.lower()
+                # Look for temporal indicators
+                temporal_words = ["winter", "summer", "spring", "autumn", "fall",
+                                 "night", "day", "morning", "evening", "annually",
+                                 "yearly", "monthly", "seasonally"]
+                for tw in temporal_words:
+                    if tw in val_lower:
+                        verb = "do" if is_plural(subject) else "does"
+                        return f"{subject.title()} {action} in {tw}."
+
+        # Check for explicit temporal relations
+        for rel in ["hibernates_in", "migrates_in", "spawns_in", f"{action}_in"]:
+            values = subj_facts.get(rel, [])
+            if values:
+                return f"{subject.title()} {action} in {prettify(values[0])}."
+
+        return f"I don't know when {subject} {action}."
+
+    # Pattern 3: "what happens in [season/time]?"
+    match = re.match(r"what\s+happens\s+in\s+(?:the\s+)?(\w+)", t)
+    if match:
+        time_period = match.group(1).strip().lower()
+
+        # Search all facts for this time period
+        results = []
+        for entity, relations in parser.loom.knowledge.items():
+            if entity in ["self", "user"] or entity.startswith("?_"):
+                continue
+
+            for rel, values in relations.items():
+                for val in values:
+                    if time_period in val.lower():
+                        verb = rel.replace("_", " ")
+                        results.append(f"{prettify(entity)} {verb} {prettify(val)}")
+
+        if results:
+            return f"In {time_period}: " + "; ".join(results[:5]) + "."
+
+        return f"I don't know what happens in {time_period}."
+
+    return None
+
+
+def _check_currently_query(parser, t: str) -> str | None:
+    """
+    Handle queries about current state:
+    - "what is X currently doing?"
+    - "where is X now?"
+    - "what is X right now?"
+    """
+    # Pattern: "what is X currently/now/right now?"
+    match = re.match(r"(?:what\s+is|where\s+is)\s+(.+?)\s+(?:currently|now|right\s+now|at\s+the\s+moment)", t)
+    if not match:
+        return None
+
+    subject = match.group(1).strip().rstrip("?")
+
+    # Use temporal-aware get with "currently" filter
+    results = []
+
+    # Check various relations with current temporal filter
+    for rel in ["is", "does", "lives_in", "can", "has"]:
+        current_facts = parser.loom.get(subject, rel, temporal="currently")
+        if current_facts:
+            for fact in current_facts:
+                verb = rel.replace("_", " ")
+                results.append(f"{verb} {prettify(fact)}")
+
+    if results:
+        return f"{subject.title()} currently {', '.join(results)}."
+
+    # Fall back to regular query
+    is_facts = parser._try_get(subject, "is")
+    if is_facts:
+        return f"{subject.title()} is {prettify(is_facts[0])}."
+
+    return f"I don't know what {subject} is doing currently."

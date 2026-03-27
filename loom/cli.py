@@ -11,13 +11,48 @@ def print_header():
     print()
     print("  ╔═══════════════════════════════════════════════════╗")
     print("  ║                                                   ║")
-    print("  ║                 L O O M  v0.5                     ║")
+    print("  ║                 L O O M  v0.6                     ║")
     print("  ║                                                   ║")
     print("  ║       Weaving Knowledge, Thread by Thread         ║")
     print("  ║                                                   ║")
     print("  ╚═══════════════════════════════════════════════════╝")
     print()
     print("  Type 'help' for commands. Just talk to me naturally!")
+    print()
+
+
+def print_about():
+    """Print the about information."""
+    print()
+    print("  ╔═══════════════════════════════════════════════════╗")
+    print("  ║                   ABOUT LOOM                      ║")
+    print("  ╚═══════════════════════════════════════════════════╝")
+    print()
+    print("  Loom is a symbolic, knowledge-graph-based AI system")
+    print("  designed to store, reason about, and expand knowledge")
+    print("  in a human-like way.")
+    print()
+    print("  Unlike statistical or vector-based AI, Loom relies on")
+    print("  explicit symbolic representations (neurons and synapses)")
+    print("  and logical reasoning mechanisms to understand and")
+    print("  interact with the world.")
+    print()
+    print("  CORE COMPONENTS")
+    print("  ──────────────────────────────────────────────────")
+    print("  Neurons   - Concepts or entities (e.g., 'dogs', 'mammals')")
+    print("  Synapses  - Connections stored as quads:")
+    print("              (subject, relation, object, context)")
+    print("  Graph     - Maps neurons to outgoing synapses")
+    print()
+    print("  KEY FEATURES")
+    print("  ──────────────────────────────────────────────────")
+    print("  - Fully explainable chains of inference")
+    print("  - Curiosity-driven discovery of new knowledge")
+    print("  - Context-aware dialogue understanding")
+    print("  - Hebbian learning (connections strengthen with use)")
+    print("  - Spreading activation for related concept discovery")
+    print("  - Property inheritance through category hierarchies")
+    print("  - Temporal awareness for time-sensitive facts")
     print()
 
 
@@ -49,7 +84,7 @@ def print_help():
     print("    'can birds fly?'        - abilities")
     print("    'what does X cause?'    - effects")
     print()
-    print("  COMMANDS")
+    print("  COMMANDS (can use optional / prefix)")
     print("  ──────────────────────────────────────────────────")
     print("    show           View neural knowledge map")
     print("    neuron X       Inspect a specific neuron")
@@ -68,6 +103,7 @@ def print_help():
     print("    forget         Erase all memory")
     print("    verbose        Toggle debug output")
     print("    clear          Clear screen")
+    print("    about          What is Loom?")
     print("    quit           Exit")
     print()
 
@@ -96,6 +132,10 @@ def run_cli():
             continue
 
         cmd = user_input.lower()
+
+        # Strip leading slash for commands (support both "about" and "/about")
+        if cmd.startswith("/"):
+            cmd = cmd[1:]
 
         # Handle commands
         if cmd in ["quit", "exit", "bye", "q"]:
@@ -151,6 +191,9 @@ def run_cli():
 
         elif cmd == "help":
             print_help()
+
+        elif cmd == "about":
+            print_about()
 
         elif cmd == "verbose":
             loom.verbose = not loom.verbose

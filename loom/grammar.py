@@ -93,6 +93,16 @@ def is_plural(word: str) -> bool:
     if word in IRREGULAR_PLURALS.values():
         return True
 
+    # Words that are same in singular/plural - treat as plural in general context
+    # (e.g., "fish live in water" vs "a fish lives in water")
+    same_singular_plural = [
+        "fish", "sheep", "deer", "moose", "salmon", "trout", "shrimp",
+        "clownfish", "jellyfish", "starfish", "swordfish", "crayfish",
+        "octopus", "squid", "cod", "bass", "tuna", "carp", "pike",
+    ]
+    if word in same_singular_plural:
+        return True
+
     # Common plural endings
     if word.endswith("s") and not word.endswith("ss"):
         # But not words that naturally end in 's'

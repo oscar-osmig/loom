@@ -28,8 +28,11 @@ from .storage import get_storage, MongoStorage
 from .activation import ActivationNetwork
 from .chunker import TextChunker
 from .training import TrainingMixin
-from .discovery import DiscoveryMixin
+from .discovery import DiscoveryMixin, ConnectionDiscoveryEngine
 from .processing import HebbianMixin, ProcessingMixin
+from .curiosity import QuestionGenerator, CuriosityNodeManager
+from .speech import SpeechProcessor, ASRBackend
+from .rules import RuleMemory, RuleEngine, Rule, RuleStatus
 
 # Confidence levels
 CONFIDENCE_HIGH = "high"      # Directly stated by user
@@ -38,6 +41,51 @@ CONFIDENCE_LOW = "low"        # Weak inference or old
 
 # Relations that should trigger inheritance propagation
 INHERITABLE_RELATIONS = ["is", "is_a", "type_of", "kind_of"]
+
+# Import context detection functions
+from .context_detection import detect_context, detect_temporal, detect_scope
+
+
+def confidence_for_source(source_type: str) -> str:
+    """
+    Get default confidence level based on source type.
+    User-stated facts get high confidence.
+    Inferred/inherited facts get medium confidence.
+    """
+    if source_type in ("user", "clarification"):
+        return CONFIDENCE_HIGH
+    elif source_type in ("inference", "inheritance"):
+        return CONFIDENCE_MEDIUM
+    else:
+        return CONFIDENCE_LOW
+
+
+def consolidate_confidence(current: str, new: str) -> str:
+    """
+    Consolidate confidence when a fact is mentioned again.
+    Repeated mentions strengthen confidence (like memory consolidation).
+
+    Rules:
+    - low + any = medium (fact confirmed once)
+    - medium + any = high (fact confirmed twice)
+    - high + any = high (already max)
+    """
+    # Priority order
+    levels = {CONFIDENCE_LOW: 1, CONFIDENCE_MEDIUM: 2, CONFIDENCE_HIGH: 3}
+
+    current_level = levels.get(current, 1)
+    new_level = levels.get(new, 1)
+
+    # Take the higher of the two, plus one level for consolidation
+    combined = max(current_level, new_level) + 1
+
+    # Cap at high
+    if combined >= 3:
+        return CONFIDENCE_HIGH
+    elif combined == 2:
+        return CONFIDENCE_MEDIUM
+    else:
+        return CONFIDENCE_LOW
 
 
 class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
@@ -48,7 +96,7 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
     def __init__(self, name: str = "loom", verbose: bool = False,
                  use_mongo: bool = True, mongo_uri: str = "mongodb://localhost:27017",
-                 database_name: str = "loom", memory_file: str = "loom_memory.json"):
+                 database_name: str = "loom", memory_file: str = "loom_memory/loom_memory.json"):
         self.name = name
         self.verbose = verbose  # Show debug output when True
 
@@ -68,19 +116,29 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         self._knowledge_cache = None
         self._cache_dirty = True
 
+        # Current input context (set by parser during processing)
+        self._input_context = None
+        self._input_properties = None
+
         # Runtime state (not persisted)
         self.conflicts = []  # Current session conflicts
         self.pending = {}  # Open questions
         self.recent = []  # Recent facts for background processing
 
+        # Speech processing state
+        self._speech_processor = None
+        self._current_speech_provenance = None
+
         # Conversation context
         self.context = ConversationContext()
 
         # Spreading activation network (Collins & Loftus model)
+        # Increased priming window (30s) and slower decay for better concept retention
         self.activation = ActivationNetwork(
-            decay_rate=0.15,
+            decay_rate=0.12,
             spread_factor=0.5,
-            priming_window=10.0
+            priming_window=30.0,
+            topic_priming_window=120.0  # 2 minutes for topic concepts
         )
 
         # Connection weights for Hebbian strengthening
@@ -96,10 +154,81 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Initialize with self-knowledge
         self.add_fact("self", "name_is", self.name, _save=True)
 
+        # Initialize default Loom knowledge (about itself)
+        self._init_loom_knowledge()
+
         # Create parser and inference engine
         self.parser = Parser(self)
         self.inference = InferenceEngine(self)
         self.inference.start()
+
+        # Curiosity engine for active questioning
+        self.curiosity = QuestionGenerator(self)
+
+        # Curiosity node manager for unknown concepts
+        self.curiosity_nodes = CuriosityNodeManager(self)
+
+        # Rule memory and forward chaining engine
+        self.rule_memory = RuleMemory(
+            self,
+            use_mongo=self.use_mongo,
+            storage_path="loom_memory/loom_rules.json"
+        )
+        self.rule_engine = RuleEngine(self, self.rule_memory)
+
+        # Connection discovery engine for background pattern learning
+        self.discovery_engine = ConnectionDiscoveryEngine(self)
+
+    def _init_loom_knowledge(self):
+        """Initialize default knowledge about Loom itself."""
+        # Only add if loom doesn't already have core facts
+        existing = self.storage.get_facts("loom", "is")
+        if existing:
+            return  # Already has knowledge
+
+        # System context and properties for Loom's self-knowledge
+        sys_props = {
+            "temporal": "always",
+            "scope": "universal",
+            "source_type": "system"
+        }
+
+        # What Loom is
+        self.storage.add_fact("loom", "is", "knowledge_system", "high",
+                              context="system", properties=sys_props)
+
+        # What Loom does
+        self.storage.add_fact("loom", "can", "learn_from_conversation", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "can", "remember_facts", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "can", "answer_questions", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "can", "connect_concepts", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "can", "make_inferences", "high",
+                              context="system", properties=sys_props)
+
+        # How Loom works (high-level)
+        self.storage.add_fact("loom", "uses", "neurons_and_synapses", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "learns_through", "natural_language", "high",
+                              context="system", properties=sys_props)
+
+        # Commands users can use
+        self.storage.add_fact("loom", "has_command", "show", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "has_command", "help", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "has_command", "neuron", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "has_command", "train", "high",
+                              context="system", properties=sys_props)
+        self.storage.add_fact("loom", "has_command", "forget", "high",
+                              context="system", properties=sys_props)
+
+        # Invalidate cache after adding
+        self._invalidate_cache()
 
     @property
     def knowledge(self) -> dict:
@@ -113,13 +242,270 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         """Mark cache as needing refresh."""
         self._cache_dirty = True
 
+    def _is_valid_entity(self, name: str) -> bool:
+        """Check if an entity name is valid (not polluted/malformed)."""
+        if not name or len(name) < 2:
+            return False
+
+        name_lower = name.lower().strip()
+        words = name_lower.replace("_", " ").split()
+
+        # Reject names with repeated words (pollution indicator)
+        if len(words) > 1 and len(words) != len(set(words)):
+            return False
+
+        # Reject very long names (likely malformed)
+        if len(name) > 50:
+            return False
+
+        # Reject names with periods or commas (sentence fragments)
+        if "." in name or "," in name:
+            return False
+
+        # Reject names that look like sentences (too many words)
+        if len(words) > 4:
+            return False
+
+        # Reject names starting with bad patterns (malformed parsing)
+        bad_starts = [
+            # Conjunctions
+            "and_", "or_", "but_", "because_", "so_", "yet_",
+            # Articles
+            "the_", "a_", "an_",
+            # Relative pronouns
+            "that_", "which_", "who_", "whom_", "whose_",
+            # Question words
+            "when_", "where_", "how_", "why_", "what_",
+            # Prepositions
+            "by_", "for_", "with_", "from_", "to_", "in_", "on_", "at_",
+            "of_", "about_", "into_", "onto_", "upon_",
+            # Adverbs (indicate sentence fragments)
+            "highly_", "very_", "really_", "sometimes_", "often_",
+            "always_", "never_", "usually_", "also_", "just_",
+            "only_", "even_", "still_", "already_",
+            # Verbs that indicate sentence fragments
+            "is_", "are_", "was_", "were_", "be_", "been_", "being_",
+            "has_", "have_", "had_", "do_", "does_", "did_",
+            "can_", "could_", "will_", "would_", "should_", "may_", "might_",
+        ]
+        for bad in bad_starts:
+            if name_lower.startswith(bad):
+                return False
+
+        # Reject names ending with bad patterns (incomplete parsing)
+        bad_ends = [
+            "_and", "_or", "_but", "_the", "_a", "_an",
+            "_is", "_are", "_was", "_were", "_be",
+            "_has", "_have", "_had", "_do", "_does",
+            "_can", "_will", "_would", "_should",
+            "_to", "_for", "_with", "_from", "_in", "_on", "_at",
+            "_that", "_which", "_who",
+        ]
+        for bad in bad_ends:
+            if name_lower.endswith(bad):
+                return False
+
+        # Reject pure pronouns
+        if name_lower in ["they", "them", "it", "he", "she", "we", "i", "you", "your",
+                          "this", "that", "these", "those", "its", "their"]:
+            return False
+
+        # Reject if contains verb patterns indicating sentence fragments
+        # e.g., "shark_possess_incredible" contains "possess" which is a verb
+        sentence_verbs = [
+            "_possess_", "_possesses_", "_contain_", "_contains_",
+            "_include_", "_includes_", "_provide_", "_provides_",
+            "_cause_", "_causes_", "_create_", "_creates_",
+            "_exist_", "_exists_", "_form_", "_forms_",
+            "_call_", "_calls_", "_called_",
+            "_kill_", "_kills_", "_support_", "_supports_",
+        ]
+        for verb in sentence_verbs:
+            if verb in name_lower:
+                return False
+
+        # Reject if first word is an adverb or modifier that doesn't make sense alone
+        bad_first_words = [
+            "highly", "very", "really", "sometimes", "often", "always",
+            "never", "usually", "incredibly", "extremely", "mostly",
+            "probably", "possibly", "actually", "basically", "generally",
+            "typically", "commonly", "rarely", "frequently", "occasionally",
+            "primarily", "mainly", "largely", "mostly", "particularly",
+        ]
+        if words and words[0] in bad_first_words:
+            return False
+
+        # Reject if last word is a verb or auxiliary
+        bad_last_words = [
+            "is", "are", "was", "were", "be", "been", "being",
+            "has", "have", "had", "do", "does", "did",
+            "can", "could", "will", "would", "should", "may", "might",
+            "believe", "believes", "think", "thinks", "know", "knows",
+            "say", "says", "said", "make", "makes", "made",
+        ]
+        if words and words[-1] in bad_last_words:
+            return False
+
+        # Reject single auxiliary/modal words
+        single_word_rejects = [
+            "will", "would", "could", "should", "may", "might", "must",
+            "shall", "can", "do", "does", "did", "has", "have", "had",
+            "is", "are", "was", "were", "be", "been", "being",
+            "the", "a", "an", "and", "or", "but", "so", "yet",
+        ]
+        if len(words) == 1 and words[0] in single_word_rejects:
+            return False
+
+        # Reject compound patterns that indicate sentence fragments
+        # e.g., "scientist_believe", "black_hole_region_spacetime"
+        if len(words) >= 2:
+            # Check for verb as second-to-last or last word in compounds
+            verbs_in_compound = [
+                "believe", "believes", "think", "thinks", "say", "says",
+                "make", "makes", "know", "knows", "see", "sees",
+                "show", "shows", "prove", "proves", "suggest", "suggests",
+                "indicate", "indicates", "reveal", "reveals",
+                "composed", "formed", "named", "called",
+            ]
+            for verb in verbs_in_compound:
+                if verb in words:
+                    return False
+
+        return True
+
+    def _is_junk_neuron(self, entity: str, relations: dict) -> bool:
+        """
+        Check if a neuron is junk and should be cleaned up.
+        Junk neurons have only reverse relations and no useful information.
+        """
+        if not relations:
+            return True
+
+        # Relations that indicate the neuron is just a reverse link
+        reverse_only_rels = {
+            'eaten_by', 'belongs_to', 'helped_by', 'needed_by',
+            'has_instance', 'home_of', 'includes', 'requires',
+            'drunk_by', 'built_by', 'caused_by', 'created_by'
+        }
+
+        # Check if ALL relations are reverse-only
+        all_reverse = all(r in reverse_only_rels for r in relations.keys())
+
+        # Check total connections
+        total_connections = sum(len(v) for v in relations.values())
+
+        # It's junk if it's reverse-only with very few connections
+        if all_reverse and total_connections <= 2:
+            return True
+
+        # Check for property-like names (adjective_noun patterns)
+        words = entity.replace("_", " ").split()
+        if len(words) >= 2 and total_connections <= 1:
+            # Likely a property value like "blue_blood", "sharp_teeth"
+            return True
+
+        return False
+
+    def cleanup_junk_neurons(self) -> int:
+        """
+        Remove junk neurons from the knowledge graph.
+        Returns the number of neurons removed.
+        """
+        removed = 0
+        to_remove = []
+
+        for entity, relations in self.knowledge.items():
+            if entity == 'self':
+                continue
+            if self._is_junk_neuron(entity, relations):
+                to_remove.append(entity)
+
+        for entity in to_remove:
+            # Remove all facts involving this entity
+            self.storage.remove_entity(entity)
+            removed += 1
+            if self.verbose:
+                print(f"       [cleaned up junk neuron: {entity}]")
+
+        if removed > 0:
+            self._invalidate_cache()
+
+        return removed
+
     def add_fact(self, subject: str, relation: str, obj: str,
-                 confidence: str = CONFIDENCE_HIGH, _save: bool = True,
-                 _propagate: bool = True):
-        """Add a fact to the knowledge graph with confidence level."""
-        s = normalize(subject)
+                 confidence: str = None, _save: bool = True,
+                 _propagate: bool = True, provenance: dict = None,
+                 context: str = None, properties: dict = None):
+        """
+        Add a fact to the knowledge graph with Quad + Properties schema.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            confidence: Confidence level (high/medium/low) - moved to properties
+            _save: Whether to persist to storage
+            _propagate: Whether to propagate inheritance
+            provenance: Legacy provenance dict (converted to properties)
+            context: Context for the fact (general, domestic, scientific, etc.)
+            properties: Full properties dict with temporal, scope, conditions, etc.
+
+        If confidence is not specified, it is determined by the source type:
+        - user/clarification: high confidence
+        - inference/inheritance: medium confidence
+        - speech: based on ASR confidence
+        - system/unknown: low confidence
+        """
+        from .resolver import resolve_to_existing_neuron
+
+        # Build context dict for contextual resolution
+        resolution_context = None
+        if hasattr(self, 'context') and self.context:
+            resolution_context = {
+                "last_subject": getattr(self.context, 'last_subject', None),
+                "last_object": getattr(self.context, 'last_object', None),
+                "topics": getattr(self.context, '_topic_concepts', []) if hasattr(self.context, '_topic_concepts') else []
+            }
+
+        # Resolve subject and object to existing neurons if possible
+        s, s_resolution = resolve_to_existing_neuron(subject, self.knowledge, resolution_context)
         r = relation.lower().strip()
-        o = normalize(obj)
+        o, o_resolution = resolve_to_existing_neuron(obj, self.knowledge, resolution_context)
+
+        # Log resolution if verbose and resolution happened
+        if self.verbose:
+            if s_resolution != "new" and s_resolution != "exact":
+                print(f"       [resolved: '{subject}' -> '{s}' ({s_resolution})]")
+            if o_resolution != "new" and o_resolution != "exact":
+                print(f"       [resolved: '{obj}' -> '{o}' ({o_resolution})]")
+
+        # Validate entity names to prevent pollution
+        if not self._is_valid_entity(s) or not self._is_valid_entity(o):
+            if self.verbose:
+                print(f"       [rejected invalid entity: {s} or {o}]")
+            return
+
+        # Use speech provenance if available and no explicit provenance given
+        if provenance is None and self._current_speech_provenance is not None:
+            provenance = self._current_speech_provenance.copy()
+
+        # Determine confidence from provenance if not explicitly provided
+        if confidence is None:
+            if provenance and "source_type" in provenance:
+                source_type = provenance["source_type"]
+                if source_type == "speech":
+                    # Use ASR confidence if available
+                    asr_conf = provenance.get("confidence", 0.8)
+                    if asr_conf >= 0.9:
+                        confidence = CONFIDENCE_HIGH
+                    elif asr_conf >= 0.7:
+                        confidence = CONFIDENCE_MEDIUM
+                    else:
+                        confidence = CONFIDENCE_LOW
+                else:
+                    confidence = confidence_for_source(source_type)
+            else:
+                confidence = CONFIDENCE_HIGH  # Default: user-stated
 
         # Check for conflicts before adding
         if _save:
@@ -130,8 +516,41 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                 if self.verbose:
                     print(f"       [conflict detected: {conflict}]")
 
-        # Add to storage
-        added = self.storage.add_fact(s, r, o, confidence)
+        # Check if fact already exists - if so, consolidate (strengthen confidence)
+        existing = self.get(s, r) or []
+        if o in existing:
+            # Fact already exists - consolidate by strengthening
+            current_confidence = self.get_confidence(s, r, o)
+            new_confidence = self._consolidate_confidence(current_confidence, confidence)
+            if new_confidence != current_confidence:
+                self.update_confidence(s, r, o, new_confidence)
+                if self.verbose:
+                    print(f"       [consolidated: {s} ~> {r} ~> {o} ({current_confidence} → {new_confidence})]")
+            # Also strengthen Hebbian weight on repeated mention
+            if hasattr(self, 'strengthen_connection'):
+                self.strengthen_connection(s, r, o, amount=0.3)
+            return  # Don't add duplicate
+
+        # Use input context as fallback if no explicit context provided
+        ctx = context
+        if ctx is None and self._input_context:
+            ctx = self._input_context
+
+        # Build properties from provided values or legacy provenance
+        props = properties.copy() if properties else {}
+        if self._input_properties and not properties:
+            props.update(self._input_properties)
+        props["confidence"] = confidence
+        if provenance:
+            props["source_type"] = provenance.get("source_type", "user")
+            props["premises"] = provenance.get("premises", [])
+            props["rule_id"] = provenance.get("rule_id")
+            props["speaker_id"] = provenance.get("speaker_id")
+            props["derivation_id"] = provenance.get("derivation_id")
+
+        # Add to storage with context and properties
+        added = self.storage.add_fact(s, r, o, confidence,
+                                       context=ctx, properties=props)
 
         if added:
             self._invalidate_cache()
@@ -158,20 +577,34 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if r == "color":
             self.add_fact(obj, "is_color_of", subject, confidence, _save, _propagate=False)
 
-    def retract_fact(self, subject: str, relation: str, obj: str):
-        """Remove a fact from the knowledge graph."""
+    def retract_fact(self, subject: str, relation: str, obj: str,
+                     cascade: bool = True):
+        """
+        Remove a fact from the knowledge graph.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            cascade: If True (default), also retract dependent inferred facts
+
+        Returns:
+            dict with 'retracted' (bool) and 'cascade_count' (int)
+        """
         s = normalize(subject)
         r = relation.lower().strip()
         o = normalize(obj)
 
-        removed = self.storage.retract_fact(s, r, o)
+        result = self.storage.retract_fact(s, r, o, cascade=cascade)
 
-        if removed:
+        if result["retracted"]:
             self._invalidate_cache()
             if self.verbose:
                 print(f"       [unwoven: {s} ~> {r} ~> {o}]")
+                if result["cascade_count"] > 0:
+                    print(f"       [cascaded: {result['cascade_count']} dependent facts also retracted]")
 
-        return removed
+        return result
 
     def add_constraint(self, subject: str, relation: str, obj: str, condition: str):
         """Add a constraint/condition to a fact."""
@@ -256,10 +689,109 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         o = normalize(obj)
         self.storage.update_confidence(s, r, o, confidence)
 
-    def get(self, subject: str, relation: str) -> list | None:
-        """Get targets for a subject-relation pair."""
-        results = self.storage.get_facts(normalize(subject), relation.lower().strip())
+    def _consolidate_confidence(self, current: str, new: str) -> str:
+        """Consolidate confidence when a fact is repeated."""
+        return consolidate_confidence(current, new)
+
+    def get(self, subject: str, relation: str, context: str = None,
+            temporal: str = None) -> list | None:
+        """
+        Get targets for a subject-relation pair, optionally filtered by context and temporal scope.
+
+        Args:
+            subject: The entity to query
+            relation: The relation type
+            context: Optional context filter
+            temporal: Optional temporal filter ("always", "currently", "past", "future", "sometimes")
+                     If None, returns all facts regardless of temporal scope.
+                     If "currently", returns "always" and "currently" scoped facts.
+
+        Returns:
+            List of target values or None if not found
+        """
+        # If no temporal filter, use the simple query
+        if temporal is None:
+            results = self.storage.get_facts(normalize(subject), relation.lower().strip(),
+                                              context=context)
+            return results if results else None
+
+        # Get facts with properties to filter by temporal
+        full_facts = self.storage.get_facts_with_context(
+            normalize(subject), relation.lower().strip()
+        )
+
+        if not full_facts:
+            return None
+
+        # Filter by temporal scope
+        filtered = []
+        for fact in full_facts:
+            props = fact.get("properties", {})
+            fact_temporal = props.get("temporal", "always")
+
+            if self._temporal_matches(fact_temporal, temporal):
+                filtered.append(fact["object"])
+
+        return filtered if filtered else None
+
+    def _temporal_matches(self, fact_temporal: str, query_temporal: str) -> bool:
+        """
+        Check if a fact's temporal scope matches the query temporal scope.
+
+        Temporal scopes:
+        - "always": Universal truth, matches any query
+        - "currently": True now, matches "currently" or "always" queries
+        - "sometimes": Occasional, matches "sometimes" or "always" queries
+        - "past": Was true, only matches "past" queries
+        - "future": Will be true, only matches "future" queries
+
+        Args:
+            fact_temporal: The temporal scope stored with the fact
+            query_temporal: The temporal scope being queried
+
+        Returns:
+            True if the fact should be included in results
+        """
+        # "always" facts match any query (universal truths)
+        if fact_temporal == "always":
+            return True
+
+        # Exact match
+        if fact_temporal == query_temporal:
+            return True
+
+        # "currently" query matches "always" (handled above) and "currently" facts
+        if query_temporal == "currently" and fact_temporal == "currently":
+            return True
+
+        # "sometimes" query is inclusive - matches "sometimes", "always" (handled), "currently"
+        if query_temporal == "sometimes" and fact_temporal in ["sometimes", "currently"]:
+            return True
+
+        # "always" query only matches "always" facts (already handled)
+        # "past" query only matches "past" facts (exact match handled)
+        # "future" query only matches "future" facts (exact match handled)
+
+        return False
+
+    def get_with_properties(self, subject: str, relation: str) -> list | None:
+        """
+        Get facts with their context and properties (Quad + Properties).
+
+        Returns list of dicts with 'object', 'context', 'properties' keys.
+        """
+        results = self.storage.get_facts_with_context(
+            normalize(subject), relation.lower().strip()
+        )
         return results if results else None
+
+    def get_fact_metadata(self, subject: str, relation: str, obj: str,
+                          context: str = None) -> dict | None:
+        """Get full metadata for a specific fact."""
+        return self.storage.get_fact_with_metadata(
+            normalize(subject), relation.lower().strip(), normalize(obj),
+            context=context
+        )
 
     def copy_properties(self, target: str, source: str):
         """Copy properties from source to target (Hebbian-style linking)."""
@@ -274,9 +806,133 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                     if v not in existing:
                         self.add_fact(target, rel, v)
 
+    # ==================== TEMPORAL AWARENESS ====================
+
+    def get_current_facts(self, subject: str, relation: str) -> list | None:
+        """Get facts that are currently true (filters out 'past' and 'future' scoped facts)."""
+        return self.get(subject, relation, temporal="currently")
+
+    def get_past_facts(self, subject: str, relation: str) -> list | None:
+        """Get facts that were true in the past."""
+        return self.get(subject, relation, temporal="past")
+
+    def get_future_facts(self, subject: str, relation: str) -> list | None:
+        """Get facts that will be true in the future."""
+        return self.get(subject, relation, temporal="future")
+
+    def detect_temporal_conflicts(self, subject: str = None) -> list:
+        """
+        Detect temporal conflicts in the knowledge graph.
+
+        A temporal conflict occurs when:
+        - A fact is marked as "currently" true but conflicts with another current fact
+        - A fact marked as "past" contradicts an "always" fact
+        - Same property has different values at different times
+
+        Args:
+            subject: Optional - check only this subject's facts
+
+        Returns:
+            List of conflict dicts with 'type', 'subject', 'relation', 'details'
+        """
+        conflicts = []
+
+        # Get all facts or just for specific subject
+        if subject:
+            subjects_to_check = [normalize(subject)]
+        else:
+            subjects_to_check = list(self.knowledge.keys())
+
+        for subj in subjects_to_check:
+            if subj.startswith("?_") or subj in ["self", "user"]:
+                continue
+
+            # Get all facts with properties for this subject
+            for relation in self.knowledge.get(subj, {}).keys():
+                facts_with_props = self.storage.get_facts_with_context(subj, relation)
+                if not facts_with_props:
+                    continue
+
+                # Group by temporal scope
+                by_temporal = {}
+                for fact in facts_with_props:
+                    props = fact.get("properties", {})
+                    temporal = props.get("temporal", "always")
+                    if temporal not in by_temporal:
+                        by_temporal[temporal] = []
+                    by_temporal[temporal].append(fact["object"])
+
+                # Check for conflicts
+                # 1. "can" vs "cannot" type conflicts across temporal scopes
+                if relation == "can" and "cannot" in self.knowledge.get(subj, {}):
+                    current_can = by_temporal.get("currently", []) + by_temporal.get("always", [])
+                    cannot_facts = self.storage.get_facts_with_context(subj, "cannot") or []
+                    current_cannot = []
+                    for f in cannot_facts:
+                        t = f.get("properties", {}).get("temporal", "always")
+                        if t in ["currently", "always"]:
+                            current_cannot.append(f["object"])
+
+                    overlap = set(current_can) & set(current_cannot)
+                    if overlap:
+                        conflicts.append({
+                            "type": "can_cannot_conflict",
+                            "subject": subj,
+                            "relation": relation,
+                            "details": f"Both 'can' and 'cannot' for: {list(overlap)}"
+                        })
+
+                # 2. "past" fact contradicting "always" fact
+                if "past" in by_temporal and "always" in by_temporal:
+                    past_vals = set(by_temporal["past"])
+                    always_vals = set(by_temporal["always"])
+                    if past_vals & always_vals:
+                        # Same value marked as both "past" and "always" is weird but not conflict
+                        pass
+                    # Could add more sophisticated conflict detection here
+
+        return conflicts
+
+    def get_temporal_summary(self, subject: str) -> dict:
+        """
+        Get a summary of facts about a subject organized by temporal scope.
+
+        Returns:
+            Dict with keys: 'always', 'currently', 'past', 'future', 'sometimes'
+            Each containing a dict of relation -> [values]
+        """
+        summary = {
+            "always": {},
+            "currently": {},
+            "past": {},
+            "future": {},
+            "sometimes": {}
+        }
+
+        subj_facts = self.knowledge.get(normalize(subject), {})
+        for relation in subj_facts.keys():
+            facts_with_props = self.storage.get_facts_with_context(normalize(subject), relation)
+            if not facts_with_props:
+                continue
+
+            for fact in facts_with_props:
+                props = fact.get("properties", {})
+                temporal = props.get("temporal", "always")
+                if temporal in summary:
+                    if relation not in summary[temporal]:
+                        summary[temporal][relation] = []
+                    summary[temporal][relation].append(fact["object"])
+
+        return summary
+
     def process(self, text: str) -> str:
         """Process user input and return response."""
-        return self.parser.parse(text)
+        # Check if multi-sentence - use paragraph processing
+        sentences = self.chunker.split_sentences(text)
+        if len(sentences) > 1:
+            return self.process_text(text)
+        # Use process_with_activation for single sentences (includes simplification)
+        return self.process_with_activation(text)
 
     def show_knowledge(self):
         """Display current knowledge as neural network visualization."""
@@ -336,6 +992,8 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             self.context = ConversationContext()
         # Re-add self-knowledge
         self.add_fact("self", "name_is", self.name)
+        # Re-add loom knowledge
+        self._init_loom_knowledge()
 
     def show_conflicts(self):
         """Display detected conflicts."""
@@ -349,6 +1007,222 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                 print(f"  |    - {conflict['fact1']}")
                 print(f"  |    - {conflict['fact2']}")
         print("  +-----------------------------------------------+\n")
+
+    def get_next_question(self) -> str | None:
+        """Get the next question from the curiosity engine."""
+        if hasattr(self, 'curiosity'):
+            question = self.curiosity.get_next_question()
+            if question:
+                return self.curiosity.format_question_prompt(question)
+        return None
+
+    def get_questions(self, n: int = 3) -> list:
+        """Get top N questions from the curiosity engine."""
+        if hasattr(self, 'curiosity'):
+            questions = self.curiosity.get_top_questions(n)
+            return [self.curiosity.format_question_prompt(q) for q in questions]
+        return []
+
+    def show_questions(self):
+        """Display pending questions from the curiosity engine."""
+        print("\n  +-- Curiosity Questions ------------------------+")
+        if not hasattr(self, 'curiosity'):
+            print("  |  Curiosity engine not initialized.")
+        else:
+            questions = self.curiosity.get_top_questions(5)
+            if not questions:
+                print("  |  No questions pending.")
+            else:
+                for i, q in enumerate(questions, 1):
+                    formatted = self.curiosity.format_question_prompt(q)
+                    print(f"  |  {i}. {formatted}")
+                    print(f"  |     (priority: {q.priority:.1f})")
+        print("  +-----------------------------------------------+\n")
+
+    def run_curiosity_cycle(self):
+        """Manually trigger a curiosity engine cycle."""
+        if hasattr(self, 'curiosity'):
+            self.curiosity.run_cycle()
+            return self.curiosity.get_queue_size()
+        return 0
+
+    # ==================== CURIOSITY NODES ====================
+
+    def create_curiosity_node(self, topic: str, context: str = "") -> str:
+        """
+        Create a curiosity node for an unknown concept.
+
+        Args:
+            topic: The unknown concept name
+            context: What triggered this curiosity
+
+        Returns:
+            The ?_<topic> node name
+        """
+        if hasattr(self, 'curiosity_nodes'):
+            node = self.curiosity_nodes.create_node(topic, context)
+            return node.node_name
+        return None
+
+    def explore_curiosity(self, topic: str) -> list:
+        """
+        Explore related concepts for a curiosity topic.
+
+        Returns list of related concept names.
+        """
+        if hasattr(self, 'curiosity_nodes'):
+            return self.curiosity_nodes.explore_node(topic)
+        return []
+
+    def get_curiosity_hypotheses(self, topic: str) -> list:
+        """
+        Generate hypotheses about an unknown concept.
+
+        Returns list of hypothesized facts.
+        """
+        if hasattr(self, 'curiosity_nodes'):
+            return self.curiosity_nodes.generate_hypotheses(topic)
+        return []
+
+    def resolve_curiosity(self, topic: str, facts: list = None) -> bool:
+        """
+        Resolve a curiosity node with actual knowledge.
+
+        Args:
+            topic: The topic to resolve
+            facts: Optional list of fact dicts with subject/relation/object
+
+        Returns:
+            True if resolved, False otherwise
+        """
+        if hasattr(self, 'curiosity_nodes'):
+            return self.curiosity_nodes.resolve_node(topic, facts)
+        return False
+
+    def get_curiosity_about(self, topic: str) -> dict | None:
+        """
+        Get information about a curiosity node.
+
+        Returns dict with node info or None if not found.
+        """
+        if hasattr(self, 'curiosity_nodes'):
+            node = self.curiosity_nodes.get_node(topic)
+            if node:
+                return {
+                    "topic": node.topic,
+                    "node_name": node.node_name,
+                    "activation": node.activation,
+                    "status": node.status.value,
+                    "age": node.age,
+                    "attempts": node.attempts,
+                    "related_concepts": list(node.related_concepts),
+                    "hypotheses": node.linked_facts,
+                    "source_context": node.source_context
+                }
+        return None
+
+    def is_curious_about(self, topic: str) -> bool:
+        """Check if we have an active curiosity about a topic."""
+        if hasattr(self, 'curiosity_nodes'):
+            return self.curiosity_nodes.has_curiosity(topic)
+        return False
+
+    def show_curiosity_nodes(self):
+        """Display active curiosity nodes."""
+        print("\n  +-- Curiosity Nodes (Unknown Concepts) ----------+")
+        if not hasattr(self, 'curiosity_nodes'):
+            print("  |  Curiosity node manager not initialized.")
+        else:
+            nodes = self.curiosity_nodes.get_all_nodes()
+            if not nodes:
+                print("  |  No active curiosity nodes.")
+            else:
+                for node in nodes:
+                    print(f"  |  {node.node_name}")
+                    print(f"  |    Status: {node.status.value}")
+                    print(f"  |    Activation: {node.activation:.2f}")
+                    print(f"  |    Age: {node.age:.0f}s")
+                    if node.related_concepts:
+                        related = list(node.related_concepts)[:3]
+                        print(f"  |    Related: {', '.join(related)}")
+                    if node.linked_facts:
+                        print(f"  |    Hypotheses: {len(node.linked_facts)}")
+        print("  +-----------------------------------------------+\n")
+
+    def cleanup_curiosity_nodes(self) -> int:
+        """Clean up expired curiosity nodes."""
+        if hasattr(self, 'curiosity_nodes'):
+            return self.curiosity_nodes.cleanup_expired()
+        return 0
+
+    # ==================== SPEECH PROCESSING ====================
+
+    def get_speech_processor(self, backend: str = "mock"):
+        """
+        Get or create the speech processor.
+
+        Args:
+            backend: ASR backend to use ("whisper_local", "whisper_api", "vosk", "mock")
+
+        Returns:
+            SpeechProcessor instance
+        """
+        if self._speech_processor is None:
+            backend_enum = ASRBackend(backend)
+            self._speech_processor = SpeechProcessor(self, backend=backend_enum)
+        return self._speech_processor
+
+    def process_audio(self, audio_path: str, backend: str = "mock") -> dict:
+        """
+        Process an audio file and extract knowledge.
+
+        Args:
+            audio_path: Path to the audio file
+            backend: ASR backend to use
+
+        Returns:
+            Dict with transcript and extraction results
+        """
+        processor = self.get_speech_processor(backend)
+        return processor.process_audio_file(audio_path)
+
+    def process_speech(self, text: str, speaker_id: str = None,
+                       confidence: float = 1.0) -> str:
+        """
+        Process text as if it came from speech input.
+
+        Args:
+            text: The transcribed text
+            speaker_id: Optional speaker identifier
+            confidence: ASR confidence (0.0-1.0)
+
+        Returns:
+            Loom's response
+        """
+        from datetime import datetime
+
+        # Create speech provenance
+        self._current_speech_provenance = {
+            "source_type": "speech",
+            "transcript_id": f"manual_{int(datetime.now().timestamp())}",
+            "segment_index": 0,
+            "segment_text": text,
+            "start_time": 0.0,
+            "end_time": 0.0,
+            "confidence": confidence,
+            "speaker_id": speaker_id,
+            "created_at": datetime.utcnow().isoformat(),
+            "premises": [],
+            "rule_id": None,
+            "derivation_id": None,
+        }
+
+        try:
+            response = self.process(text)
+        finally:
+            self._current_speech_provenance = None
+
+        return response
 
     def show_procedures(self):
         """Display stored procedures."""
@@ -365,8 +1239,67 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
     def get_stats(self) -> dict:
         """Get storage statistics."""
-        return self.storage.get_stats()
+        stats = self.storage.get_stats()
+        # Add rule stats
+        if hasattr(self, 'rule_memory'):
+            stats['rules'] = self.rule_memory.get_stats()
+        return stats
 
     def close(self):
         """Close storage connection."""
         self.storage.close()
+
+    # ==================== RULE SYSTEM ====================
+
+    def add_rule(self, rule: Rule) -> str:
+        """Add a rule to the rule memory."""
+        return self.rule_memory.add_rule(rule)
+
+    def get_rules(self, status: RuleStatus = None) -> list:
+        """Get rules, optionally filtered by status."""
+        return self.rule_memory.get_all_rules(status)
+
+    def confirm_rule(self, rule_id: str):
+        """Confirm a candidate rule, making it active."""
+        self.rule_memory.confirm_rule(rule_id)
+
+    def reject_rule(self, rule_id: str):
+        """Reject a candidate rule."""
+        self.rule_memory.reject_rule(rule_id)
+
+    def run_forward_chain(self, max_iterations: int = 10) -> list:
+        """
+        Run forward chaining to derive new facts from rules.
+
+        Returns list of derived facts.
+        """
+        return self.rule_engine.run_forward_chain(max_iterations)
+
+    def show_rules(self):
+        """Display stored rules."""
+        print("\n  +-- Rules --------------------------------------+")
+        rules = self.rule_memory.get_all_rules()
+        if not rules:
+            print("  |  No rules stored.")
+        else:
+            for rule in rules:
+                status_str = f"[{rule.status.value}]"
+                print(f"  |  {rule.rule_id} {status_str}")
+                print(f"  |    IF {' AND '.join(str(p) for p in rule.premises)}")
+                print(f"  |    THEN {rule.conclusion}")
+                print(f"  |    (support: {rule.support_count}, confidence: {rule.confidence:.2f})")
+        print("  +-----------------------------------------------+\n")
+
+    def show_candidate_rules(self):
+        """Display candidate rules awaiting confirmation."""
+        print("\n  +-- Candidate Rules (Pending) -------------------+")
+        rules = self.rule_memory.get_candidate_rules()
+        if not rules:
+            print("  |  No candidate rules.")
+        else:
+            for rule in rules:
+                print(f"  |  {rule.rule_id}")
+                print(f"  |    IF {' AND '.join(str(p) for p in rule.premises)}")
+                print(f"  |    THEN {rule.conclusion}")
+                print(f"  |    Support: {rule.support_count}")
+        print("  +-----------------------------------------------+\n")

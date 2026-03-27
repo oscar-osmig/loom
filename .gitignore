@@ -1,13 +1,20 @@
+# IDE and cache
 .claude
 .idea/
 __pycache__/
 *.pyc
 *.bak
 nul
+
+# Project folders (user-specific data)
+img/
+tests/
+loom_memory/
+
+# Old individual file ignores (now covered by folders)
 inspiration.png
 concept.txt
 concept_example.py
 research.txt
 training_guide.txt
 RESEARCH_ENHANCEMENTS.md
-loom_memory.json

@@ -42,7 +42,7 @@ def get_storage(use_mongo: bool = True, **kwargs):
     Returns:
         Storage backend instance (MongoStorage or JSONFallbackStorage)
     """
-    memory_file = kwargs.pop("memory_file", "loom_memory.json")
+    memory_file = kwargs.pop("memory_file", "loom_memory/loom_memory.json")
 
     if use_mongo and PYMONGO_AVAILABLE:
         try:

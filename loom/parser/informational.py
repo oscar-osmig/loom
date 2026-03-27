@@ -19,6 +19,199 @@ def _check_informational_pattern(parser, t: str) -> str | None:
     if parser._is_question(t):
         return None
 
+    # ============================================================
+    # ENCYCLOPEDIC PATTERNS - Handle complex descriptive sentences
+    # ============================================================
+
+    # Pattern 0a: "X are Y that come in variety of A, B, and C, ranging from D to E"
+    # e.g., "Animals are living creatures that come in an incredible variety of shapes, sizes, and behaviors, ranging from..."
+    match = re.match(
+        r"(.+?)\s+(?:is|are)\s+(.+?)\s+that\s+come\s+in\s+(?:an?\s+)?(?:\w+\s+)?variety\s+of\s+(.+?)(?:,\s*ranging|\.|$)",
+        t, re.IGNORECASE
+    )
+    if match:
+        subj = match.group(1).strip()
+        category = match.group(2).strip()
+        variety_items = match.group(3).strip()
+
+        # Clean subject
+        for prefix in ["the ", "a ", "an ", "all "]:
+            if subj.lower().startswith(prefix):
+                subj = subj[len(prefix):]
+
+        # Add category facts
+        parser.loom.add_fact(subj, "is", category)
+        # Extract adjective from category (e.g., "living creatures" -> "living")
+        cat_words = category.split()
+        if len(cat_words) >= 2 and cat_words[0].lower() not in ['a', 'an', 'the']:
+            parser.loom.add_fact(subj, "has_property", cat_words[0])
+
+        # Add variety
+        parser.loom.add_fact(subj, "has", "variety")
+
+        # Extract variety items (shapes, sizes, behaviors)
+        items = re.split(r',\s*(?:and\s+)?|\s+and\s+', variety_items)
+        for item in items:
+            item = item.strip().rstrip('.')
+            if item and len(item) > 1:
+                parser.loom.add_fact(subj, "has", item)
+
+        # Check for "ranging from X to Y" in the full text
+        range_match = re.search(r'ranging\s+from\s+(?:the\s+)?(\w+\s+\w+)\s+to\s+(?:the\s+)?(\w+\s+\w+)', t, re.IGNORECASE)
+        if range_match:
+            item1 = range_match.group(1).strip()
+            item2 = range_match.group(2).strip()
+            # Extract core noun (tiniest insects -> insects)
+            item1_noun = item1.split()[-1] if item1 else ''
+            item2_noun = item2.split()[-1] if item2 else ''
+            if item1_noun:
+                parser.loom.add_fact(item1_noun, "is", subj)
+            if item2_noun:
+                parser.loom.add_fact(item2_noun, "is", subj)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 0b: "Some X, like A and B, are known/admired for Y, while others, such as C and D, are Z"
+    # e.g., "Some animals, like lions and wolves, are known for their strength..., while others, such as butterflies..."
+    # Split into two parts at "while others"
+    if re.search(r',\s*(?:like|such\s+as)\s+.+,\s*(?:are|is)\s+(?:known|admired|famous)\s+for', t, re.IGNORECASE):
+        # Check for "while others" to split the sentence
+        while_match = re.search(r',\s*while\s+others', t, re.IGNORECASE)
+        if while_match:
+            first_part = t[:while_match.start()]
+            second_part = t[while_match.end():]
+        else:
+            first_part = t
+            second_part = None
+
+        # Parse first part: "Some animals, like lions and wolves, are known for their strength and social structures"
+        match1 = re.match(
+            r"(?:some|many|most)?\s*(.+?),\s*(?:like|such\s+as)\s+(.+?),\s*(?:are|is)\s+(?:known|admired|famous)\s+for\s+(?:their\s+)?(.+)",
+            first_part, re.IGNORECASE
+        )
+        if match1:
+            subj = match1.group(1).strip()
+            examples1 = match1.group(2).strip()
+            qualities1 = match1.group(3).strip()
+
+            # Process first group of examples
+            for ex in re.split(r'\s+and\s+', examples1):
+                ex = ex.strip()
+                if ex:
+                    parser.loom.add_fact(ex, "is", subj)
+                    # Extract qualities
+                    for qual in re.split(r'\s+and\s+', qualities1):
+                        qual = qual.strip().rstrip('.')
+                        if qual and len(qual) > 1:
+                            parser.loom.add_fact(ex, "known_for", qual)
+
+            # Parse second part if exists: ", such as butterflies and birds, are admired for their beauty..."
+            if second_part:
+                match2 = re.match(
+                    r",?\s*(?:such\s+as|like)\s+(.+?),\s*(?:are|is)\s+(?:known|admired|famous)\s+for\s+(?:their\s+)?(.+)",
+                    second_part, re.IGNORECASE
+                )
+                if match2:
+                    examples2 = match2.group(1).strip()
+                    qualities2 = match2.group(2).strip()
+                    for ex in re.split(r'\s+and\s+', examples2):
+                        ex = ex.strip()
+                        if ex:
+                            parser.loom.add_fact(ex, "is", subj)
+                            for qual in re.split(r'\s+and\s+', qualities2):
+                                qual = qual.strip().rstrip('.')
+                                if qual and len(qual) > 1:
+                                    parser.loom.add_fact(ex, "known_for", qual)
+
+            parser.last_subject = subj
+            return "Got it."
+
+    # Pattern 0c: "X play roles in Y, helping to Z by participating in A, B, and C"
+    # e.g., "Animals play essential roles in ecosystems, helping to maintain balance by participating in food chains, pollination"
+    match = re.match(
+        r"(.+?)\s+play(?:s)?\s+(?:\w+\s+)?roles?\s+in\s+(\w+),?\s*(?:helping\s+to\s+(.+?)\s+by\s+)?(?:participating\s+in\s+)?(.+)?",
+        t, re.IGNORECASE
+    )
+    if match:
+        subj = match.group(1).strip()
+        context = match.group(2).strip()
+        action = match.group(3)
+        activities = match.group(4)
+
+        parser.loom.add_fact(subj, "has_role_in", context)
+        parser.loom.add_fact(subj, "part_of", context)
+
+        if action:
+            action = action.strip()
+            parser.loom.add_fact(subj, "helps", action)
+
+        if activities:
+            # Parse "food chains, pollination, and seed dispersal"
+            for activity in re.split(r',\s*(?:and\s+)?|\s+and\s+', activities):
+                activity = activity.strip().rstrip('.')
+                if activity and len(activity) > 1:
+                    parser.loom.add_fact(subj, "participates_in", activity)
+                    # Also add as "do" for simpler queries
+                    parser.loom.add_fact(subj, "do", activity)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 0d: "X have inspired Y for Z in A, B, and C"
+    # e.g., "animals have inspired humans for centuries in art, culture, and science"
+    match = re.match(
+        r"(?:additionally,?\s*)?(.+?)\s+have\s+inspired\s+(\w+)\s+(?:for\s+\w+\s+)?in\s+(.+)",
+        t, re.IGNORECASE
+    )
+    if match:
+        subj = match.group(1).strip()
+        target = match.group(2).strip()
+        areas = match.group(3).strip()
+
+        parser.loom.add_fact(subj, "inspired", target)
+
+        # Extract areas
+        for area in re.split(r',\s*(?:and\s+)?|\s+and\s+', areas):
+            area = area.strip().rstrip('.')
+            # Clean trailing phrases
+            area = re.sub(r',?\s*reminding\s+.+$', '', area)
+            if area and len(area) > 1 and 'reminding' not in area.lower():
+                parser.loom.add_fact(subj, "influences", area)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 0e: "X, each adapted to Y" - extract adaptations
+    # e.g., "each adapted in unique ways to survive and thrive in their habitats"
+    if 'adapted' in t.lower():
+        match = re.search(r'(?:each\s+)?adapted\s+(?:in\s+\w+\s+ways\s+)?to\s+(.+?)(?:\s+in\s+their|\.|$)', t, re.IGNORECASE)
+        if match:
+            subj = parser.last_subject or 'animals'
+            abilities = match.group(1).strip()
+            parser.loom.add_fact(subj, "has", "adaptations")
+            for ability in re.split(r'\s+and\s+', abilities):
+                ability = ability.strip()
+                if ability:
+                    parser.loom.add_fact(subj, "can", ability)
+
+    # Pattern 0f: "X, showing that Y" - extract conclusions
+    # e.g., "showing that intelligence and interaction are not limited to humans"
+    if 'showing that' in t.lower():
+        match = re.search(r'showing\s+that\s+(.+)', t, re.IGNORECASE)
+        if match:
+            conclusion = match.group(1).strip().rstrip('.')
+            subj = parser.last_subject or 'animals'
+            # Extract the things being shown
+            if 'intelligence' in conclusion.lower():
+                parser.loom.add_fact(subj, "has", "intelligence")
+            if 'interaction' in conclusion.lower():
+                parser.loom.add_fact(subj, "can", "interact")
+
+    # ============================================================
+    # ORIGINAL PATTERNS
+    # ============================================================
+
     # Pattern 1: "X are Y found in Z" (or "from A to B")
     # e.g., "Animals are living organisms found in nearly every environment on Earth, from deep oceans to high mountains"
     match = re.match(r"(.+?)\s+(?:is|are)\s+(.+?)\s+found\s+in\s+(.+)", t)
@@ -45,6 +238,93 @@ def _check_informational_pattern(parser, t: str) -> str | None:
         else:
             # Just add the whole location string
             parser.loom.add_fact(subj, "found_in", locations_str)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 1b: "X can be found in Y, including A, B, C, and D"
+    # e.g., "They can be found in almost every environment, including deep oceans, dense forests"
+    match = re.match(r"(.+?)\s+can\s+be\s+found\s+in\s+(.+?),\s*including\s+(.+)", t, re.IGNORECASE)
+    if match:
+        subj = match.group(1).strip()
+        general_loc = match.group(2).strip()
+        locations_str = match.group(3).strip()
+
+        # Resolve pronouns
+        if subj.lower() in ['they', 'it', 'these', 'those']:
+            subj = parser.last_subject or subj
+
+        # Add general location
+        parser.loom.add_fact(subj, "found_in", general_loc)
+
+        # Extract specific locations from list
+        locations = re.split(r',\s*(?:and\s+)?|\s+and\s+', locations_str)
+        for loc in locations:
+            loc = loc.strip().rstrip('.')
+            # Remove modifiers like "even", "also"
+            loc = re.sub(r'^(?:even|also|and)\s+', '', loc)
+            if loc and len(loc) > 1:
+                parser.loom.add_fact(subj, "found_in", loc)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 1c: "X communicate through/via/using Y"
+    # e.g., "Many animals communicate through sounds, movements, or chemical signals"
+    match = re.match(r"(?:many|most|some|all)?\s*(.+?)\s+communicate(?:s)?\s+(?:through|via|using|by)\s+(.+)", t, re.IGNORECASE)
+    if match:
+        subj = match.group(1).strip()
+        methods_str = match.group(2).strip()
+
+        # Add ability to communicate
+        parser.loom.add_fact(subj, "can", "communicate")
+
+        # Extract communication methods
+        methods = re.split(r',\s*(?:or\s+)?|\s+or\s+', methods_str)
+        for method in methods:
+            method = method.strip().rstrip('.')
+            # Remove modifiers
+            method = re.sub(r'^(?:even|also)\s+', '', method)
+            if method and len(method) > 1:
+                parser.loom.add_fact(subj, "communicates_via", method)
+
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 1d: "X play Y roles in Z" or "X play essential roles in Z"
+    # e.g., "Animals play essential roles in ecosystems"
+    match = re.match(r"(.+?)\s+play(?:s)?\s+(?:an?\s+)?(?:\w+\s+)?roles?\s+in\s+(.+)", t, re.IGNORECASE)
+    if match:
+        subj = match.group(1).strip()
+        context = match.group(2).strip()
+        # Clean trailing participial phrases
+        context = re.sub(r',\s*(?:helping|maintaining|participating).+$', '', context).strip()
+        parser.loom.add_fact(subj, "has_role_in", context)
+        parser.loom.add_fact(subj, "part_of", context)
+        parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 1e: "X range from A to B" or "ranging from A to B"
+    # e.g., "ranging from the tiniest insects to the largest mammals"
+    match = re.match(r"(.+?)\s+rang(?:e|ing)\s+from\s+(?:the\s+)?(.+?)\s+to\s+(?:the\s+)?(.+)", t, re.IGNORECASE)
+    if match:
+        subj = match.group(1).strip()
+        item1 = match.group(2).strip()
+        item2 = match.group(3).strip()
+
+        # Extract the core nouns from descriptive phrases
+        # "tiniest insects" -> "insects"
+        item1_noun = re.sub(r'^(?:\w+est|smallest|largest|tiniest|biggest)\s+', '', item1)
+        item2_noun = re.sub(r'^(?:\w+est|smallest|largest|tiniest|biggest)\s+', '', item2)
+        # Clean trailing text
+        item2_noun = re.sub(r'\s+on\s+.+$', '', item2_noun).strip()
+
+        if item1_noun and item2_noun:
+            # If subject is about something (animals, creatures, etc.)
+            if subj.lower() in ['they', 'animals', 'creatures', 'species']:
+                subj = parser.last_subject or 'animals'
+            parser.loom.add_fact(item1_noun, "is", subj)
+            parser.loom.add_fact(item2_noun, "is", subj)
 
         parser.last_subject = subj
         return "Got it."
@@ -249,6 +529,40 @@ def _check_informational_pattern(parser, t: str) -> str | None:
             parser.last_subject = subj
             return "Got it."
 
+        # "are known for Y" or "are admired for Y" -> known_for/admired_for
+        known_for_match = re.match(r"are\s+(known|admired|famous|recognized|noted)\s+for\s+(?:their\s+)?(.+)", predicate, re.IGNORECASE)
+        if known_for_match:
+            quality_type = known_for_match.group(1).strip().lower()
+            qualities_str = known_for_match.group(2).strip()
+            # Clean trailing clauses
+            qualities_str = re.sub(r',?\s*while\s+.+$', '', qualities_str).strip()
+            # Split on "and" to get multiple qualities
+            qualities = re.split(r'\s+and\s+', qualities_str)
+            for quality in qualities:
+                quality = quality.strip().rstrip('.')
+                if quality:
+                    parser.loom.add_fact(subj, f"{quality_type}_for", quality)
+            parser.last_subject = subj
+            return "Got it."
+
+        # "can Y" -> can: Y
+        can_match = re.match(r"can\s+(.+)", predicate, re.IGNORECASE)
+        if can_match:
+            ability = can_match.group(1).strip()
+            ability = re.sub(r',?\s*while\s+.+$', '', ability).strip()
+            parser.loom.add_fact(subj, "can", ability)
+            parser.last_subject = subj
+            return "Got it."
+
+        # "are X" (adjective/property) -> has_property: X
+        are_match = re.match(r"are\s+(.+)", predicate, re.IGNORECASE)
+        if are_match:
+            prop = are_match.group(1).strip()
+            prop = re.sub(r',?\s*while\s+.+$', '', prop).strip()
+            parser.loom.add_fact(subj, "has_property", prop)
+            parser.last_subject = subj
+            return "Got it."
+
     # Pattern 8a: "X give birth to Y and feed them Z" (reproduction with feeding - no adverb)
     # e.g., "Mammals give birth to live young and feed them milk"
     match = re.match(r"(.+?)\s+give\s+birth\s+to\s+(.+?)\s+and\s+feed\s+(?:them|their\s+young)\s+(.+)", t, re.IGNORECASE)
@@ -397,6 +711,75 @@ def _check_informational_pattern(parser, t: str) -> str | None:
         dependency = re.sub(r'\s+to\s+.+$', '', dependency).strip()
         parser.loom.add_fact(subj, "depends_on", dependency)
         parser.last_subject = subj
+        return "Got it."
+
+    # Pattern 14: Present participle clauses (narrative style)
+    # e.g., "Streams gurgled..., nourishing the roots of trees"
+    # e.g., "X sheltering countless creatures"
+    participle_patterns = [
+        (r"(.+?),?\s+nourishing\s+(?:the\s+)?(.+)", "nourishes"),
+        (r"(.+?),?\s+sheltering\s+(.+)", "shelters"),
+        (r"(.+?),?\s+sustaining\s+(.+)", "sustains"),
+        (r"(.+?),?\s+feeding\s+(.+)", "feeds"),
+        (r"(.+?),?\s+supporting\s+(.+)", "supports"),
+        (r"(.+?),?\s+protecting\s+(.+)", "protects"),
+        (r"(.+?),?\s+providing\s+(.+)", "provides"),
+    ]
+    for pattern, relation in participle_patterns:
+        match = re.search(pattern, t, re.IGNORECASE)
+        if match:
+            subj = match.group(1).strip()
+            obj = match.group(2).strip()
+            # Clean up subject - extract main noun
+            subj_words = subj.split()
+            if len(subj_words) > 3:
+                # Extract last noun phrase
+                for i, w in enumerate(subj_words):
+                    if w.lower() in ["streams", "rivers", "water", "rain", "trees", "canopy", "forest"]:
+                        subj = " ".join(subj_words[i:])
+                        break
+            # Clean up object - remove prepositional tails
+            obj = re.sub(r',\s*whose\s+.*$', '', obj).strip()
+            obj = re.sub(r'\s+of\s+giant\s+.*$', '', obj).strip()
+            if obj.startswith("roots of "):
+                target = obj[9:].strip()
+                parser.loom.add_fact(subj, relation, target)
+                parser.loom.add_fact(subj, relation, "roots")
+            else:
+                parser.loom.add_fact(subj, relation, obj)
+            parser.last_subject = subj
+            return "Got it."
+
+    # Pattern 15: "whose X Yed Z" clauses
+    # e.g., "giant kapok trees, whose towering canopies sheltered countless creatures"
+    match = re.search(r"(.+?),?\s+whose\s+(.+?)\s+(sheltered?|protected?|housed?|fed|supported?|nourished?)\s+(.+)", t, re.IGNORECASE)
+    if match:
+        main_subj = match.group(1).strip()
+        part = match.group(2).strip()
+        verb = match.group(3).strip().lower()
+        obj = match.group(4).strip()
+        # Clean main subject
+        for prefix in ["the ", "a ", "an ", "giant "]:
+            if main_subj.lower().startswith(prefix):
+                main_subj = main_subj[len(prefix):]
+        # Map past tense verbs to relations
+        verb_map = {
+            "shelter": "shelters", "sheltered": "shelters",
+            "protect": "protects", "protected": "protects",
+            "house": "houses", "housed": "houses",
+            "feed": "feeds", "fed": "feeds",
+            "support": "supports", "supported": "supports",
+            "nourish": "nourishes", "nourished": "nourishes",
+        }
+        relation = verb_map.get(verb, verb + "s")
+        # Part is part of main subject
+        parser.loom.add_fact(main_subj, "has", part)
+        parser.loom.add_fact(part, "part_of", main_subj)
+        # Part does action to object
+        parser.loom.add_fact(part, relation, obj)
+        # Also attribute to main subject
+        parser.loom.add_fact(main_subj, relation, obj)
+        parser.last_subject = main_subj
         return "Got it."
 
     return None

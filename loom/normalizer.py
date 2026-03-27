@@ -41,7 +41,13 @@ PROTECTED_WORDS = [
     # Common nouns
     "trees", "flowers", "plants", "rocks", "clouds", "stars",
     "cars", "planes", "trains", "buses", "houses", "buildings",
-    "humans", "persons", "peoples", "kids", "babies", "friends",
+    "humans", "persons", "peoples", "kids", "babies", "friends", "pets",
+    # Ocean/nature terms
+    "reefs", "beaches", "anemones", "oceans", "ecosystems", "spaces",
+    "bones", "arms", "tentacles", "species", "predators",
+    # Body parts and sounds
+    "hearts", "lungs", "brains", "limbs", "clicks", "whistles", "songs",
+    "stings", "cells",
     # Categories and classifications
     "mammals", "animals", "reptiles", "amphibians", "insects", "predators",
     "hunters", "herbivores", "carnivores", "omnivores", "vertebrates",
@@ -124,6 +130,13 @@ def normalize(text: str) -> str:
             normalized.append(w)
             continue
 
+        # Don't strip 's' from words ending in 'es' after ch, sh, x, s, z
+        # (beaches, spaces, boxes, gases, buzzes)
+        if w.endswith("es") and len(w) > 3:
+            if w[-3] in "chxsz" or w.endswith("shes"):
+                normalized.append(w)
+                continue
+
         # "rains" -> "rain" (but protect certain patterns)
         if w.endswith("s") and len(w) > 3:
             # Don't strip if second-to-last char is s, i, or u
@@ -190,3 +203,82 @@ def prettify_cause(text: str) -> str:
         return f"the {' '.join(words[:-1])} is {words[-1]}"
 
     return s
+
+
+def resolve_possessive(phrase: str, knowledge: dict) -> str:
+    """
+    Resolve possessive references to existing properties.
+
+    "loom's eyes" -> "blue_eyes" (if loom has blue_eyes)
+    "loom eyes" -> "blue_eyes" (if loom has blue_eyes)
+
+    Args:
+        phrase: The phrase to resolve (e.g., "loom's eyes")
+        knowledge: The knowledge graph dict
+
+    Returns:
+        The resolved entity name, or the original normalized phrase if no resolution found
+    """
+    phrase = phrase.lower().strip()
+
+    # Pattern 1: "X's Y" (possessive with apostrophe)
+    match = re.match(r"^(.+?)'s?\s+(.+)$", phrase)
+    if match:
+        owner = match.group(1).strip()
+        property_name = match.group(2).strip()
+        resolved = _find_property(owner, property_name, knowledge)
+        if resolved:
+            return resolved
+
+    # Pattern 2: "X Y" where X is a known entity (compound reference)
+    # Only try this if phrase has multiple words
+    words = phrase.split()
+    if len(words) >= 2:
+        # Try first word as owner
+        owner = words[0]
+        property_name = " ".join(words[1:])
+        resolved = _find_property(owner, property_name, knowledge)
+        if resolved:
+            return resolved
+
+    # No resolution found, return normalized phrase
+    return normalize(phrase)
+
+
+def _find_property(owner: str, property_hint: str, knowledge: dict) -> str | None:
+    """
+    Find a property of an owner that matches the hint.
+
+    "loom", "eyes" -> "blue_eyes" (if loom --[has]--> blue_eyes)
+    """
+    owner_norm = normalize(owner)
+    hint_norm = normalize(property_hint)
+
+    # Check if owner exists in knowledge
+    if owner_norm not in knowledge:
+        return None
+
+    owner_relations = knowledge[owner_norm]
+
+    # Look in "has" relations first (most common for properties)
+    for relation in ["has", "has_property", "owns", "possesses"]:
+        if relation in owner_relations:
+            for prop in owner_relations[relation]:
+                prop_lower = prop.lower()
+                # Check if property contains the hint
+                # "blue_eyes" contains "eyes"
+                if hint_norm in prop_lower or prop_lower.endswith(hint_norm):
+                    return prop
+                # Also check without underscores
+                if hint_norm in prop_lower.replace("_", " "):
+                    return prop
+
+    # Also check reverse: maybe the property "belongs_to" owner
+    for entity, relations in knowledge.items():
+        if "belongs_to" in relations:
+            if owner_norm in relations["belongs_to"]:
+                entity_lower = entity.lower()
+                if hint_norm in entity_lower or entity_lower.endswith(hint_norm):
+                    return entity
+
+    return None

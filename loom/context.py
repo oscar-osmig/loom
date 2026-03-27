@@ -398,3 +398,112 @@ class ConversationContext:
 
         # Teaching mode (statements)
         return "teaching"
+
+    # =========================================================================
+    # DIALOGUE ROLE TRACKING
+    # =========================================================================
+
+    def detect_dialogue_type(self, text: str) -> str:
+        """
+        Detect the type of dialogue input.
+
+        Returns:
+            'factual' - Statement of fact (cats are mammals)
+            'personal' - Personal statement (I like cats)
+            'question' - Question (what do cats eat?)
+            'opinion' - Opinion (cats are the best)
+            'chit_chat' - Conversational (how's your day?)
+        """
+        text_lower = text.lower().strip()
+
+        # Question detection
+        if text.rstrip().endswith("?"):
+            return "question"
+        question_starters = ("what", "where", "who", "why", "how", "when",
+                            "can", "does", "do", "is", "are", "will", "would")
+        if text_lower.startswith(question_starters):
+            return "question"
+
+        # Personal statement detection (I/my)
+        personal_patterns = (
+            r"^\s*i\s+",           # "I like..."
+            r"^\s*my\s+",          # "my name is..."
+            r"^\s*i'm\s+",         # "I'm happy"
+            r"^\s*i've\s+",        # "I've been..."
+            r"\bi\s+(?:like|love|hate|want|need|have|am|think|believe|feel)\b",
+        )
+        import re
+        for pattern in personal_patterns:
+            if re.search(pattern, text_lower):
+                return "personal"
+
+        # Opinion markers
+        opinion_markers = ("i think", "i believe", "in my opinion", "i feel",
+                          "seems like", "probably", "maybe", "perhaps",
+                          "the best", "the worst", "favorite", "amazing", "terrible")
+        if any(marker in text_lower for marker in opinion_markers):
+            return "opinion"
+
+        # Chit-chat patterns
+        chit_chat = ("hello", "hi ", "hey", "how are you", "how's it going",
+                    "good morning", "good evening", "thanks", "thank you",
+                    "bye", "goodbye", "see you", "nice to meet")
+        if any(chat in text_lower for chat in chit_chat):
+            return "chit_chat"
+
+        # Default to factual
+        return "factual"
+
+    def resolve_dialogue_roles(self, text: str) -> str:
+        """
+        Resolve first and second person pronouns to entities.
+
+        Mappings:
+            I, me, my, mine → 'user'
+            you, your, yours → 'loom' (self)
+
+        Returns text with pronouns replaced.
+        """
+        import re
+
+        # Don't resolve in questions about Loom itself
+        if re.search(r"\b(what|who|how)\s+(are|is|do|can)\s+you\b", text.lower()):
+            return text  # Keep 'you' for self-identity queries
+
+        resolved = text
+
+        # First person → user
+        # Be careful not to replace "I" in the middle of words
+        first_person_map = [
+            (r"\bI\s+am\b", "user is"),
+            (r"\bI'm\b", "user is"),
+            (r"\bI\s+have\b", "user has"),
+            (r"\bI've\b", "user has"),
+            (r"\bI\s+live\b", "user lives"),
+            (r"\bI\s+like\b", "user likes"),
+            (r"\bI\s+love\b", "user loves"),
+            (r"\bI\s+hate\b", "user hates"),
+            (r"\bI\s+want\b", "user wants"),
+            (r"\bI\s+need\b", "user needs"),
+            (r"\bI\s+think\b", "user thinks"),
+            (r"\bI\s+believe\b", "user believes"),
+            (r"\bI\s+know\b", "user knows"),
+            (r"\bI\s+feel\b", "user feels"),
+            (r"\bI\s+can\b", "user can"),
+            (r"\bI\s+", "user "),  # Generic fallback
+            (r"\bmy\s+", "user's "),
+            (r"\bme\b", "user"),
+        ]
+
+        for pattern, replacement in first_person_map:
+            resolved = re.sub(pattern, replacement, resolved, flags=re.IGNORECASE)
+
+        return resolved
+
+    def get_user_facts(self, knowledge_graph: dict) -> dict:
+        """
+        Get all facts about the user from the knowledge graph.
+
+        Returns dict of {relation: [values]}
+        """
+        return knowledge_graph.get("user", {})

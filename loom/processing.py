@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from .brain import Loom
 
 from .normalizer import normalize
+from .simplifier import SentenceSimplifier
+from .advanced_simplifier import AdvancedSimplifier
 
 # Hebbian learning constants
 INITIAL_WEIGHT = 1.0          # Starting connection strength
@@ -105,13 +107,44 @@ class HebbianMixin:
 class ProcessingMixin:
     """Mixin class providing text processing capabilities for Loom."""
 
-    def process_with_activation(self: "Loom", text: str) -> str:
+    def process_with_activation(self: "Loom", text: str, already_simplified: bool = False) -> str:
         """
         Process input using spreading activation for faster connections.
         Activates mentioned concepts and spreads to find related knowledge.
+        Uses AdvancedSimplifier to break complex sentences into atomic facts.
+
+        Args:
+            text: The text to process
+            already_simplified: If True, skip simplification (text is already atomic)
         """
-        # First, get standard parse result
-        response = self.parser.parse(text)
+        # If already simplified, just parse directly
+        if already_simplified:
+            response = self.parser.parse(text)
+        else:
+            # Initialize advanced simplifier (cache it for reuse)
+            if not hasattr(self, '_advanced_simplifier'):
+                self._advanced_simplifier = AdvancedSimplifier()
+
+            # Simplify complex sentences into atomic facts
+            simplified = self._advanced_simplifier.simplify(text)
+
+            # Process each simplified statement
+            responses = []
+            for statement in simplified:
+                statement = statement.strip()
+                if statement:
+                    response = self.parser.parse(statement)
+                    responses.append(response)
+
+            # Combine responses (use first successful one for display)
+            if responses:
+                response = responses[0]
+                if len(responses) > 1:
+                    learned_count = sum(1 for r in responses if 'Got it' in r)
+                    if learned_count > 1:
+                        response = f"Learned {learned_count} facts from that."
+            else:
+                response = self.parser.parse(text)
 
         # Extract entities from the text (simplified - parser should provide these)
         entities = self._extract_entities(text)
@@ -165,7 +198,9 @@ class ProcessingMixin:
     def process_paragraph(self: "Loom", text: str) -> Dict:
         """
         Process a paragraph or multi-sentence text.
-        Splits into sentences and processes each one.
+        Splits into CHUNKS (not just sentences) and processes each one.
+        Chunks handle clause-level splitting (e.g., "but" clauses).
+        Uses SentenceSimplifier to break compound sentences into simple statements.
 
         Returns:
             Dict with processing results including facts added and connections made
@@ -178,33 +213,59 @@ class ProcessingMixin:
             'responses': []
         }
 
-        # Split into sentences
-        sentences = self.chunker.split_sentences(text)
-        result['chunks_processed'] = len(sentences)
+        # Initialize advanced simplifier (cache it for reuse)
+        if not hasattr(self, '_advanced_simplifier'):
+            self._advanced_simplifier = AdvancedSimplifier()
 
-        # Detect theme
+        # Get theme from chunker but use sentence-level splitting for better parsing
+        # (The chunker over-splits creating fragments like "and gentle demeanor")
         chunked = self.chunker.process_for_knowledge(text)
         result['theme'] = chunked['theme']
+
+        # Split into sentences instead of chunks for cleaner parsing
+        chunks = self.chunker.split_sentences(text)
 
         # Activate theme concept strongly
         if chunked['theme']:
             self.activation.activate(normalize(chunked['theme']), amount=2.0)
+            self.activation.add_topic_concept(normalize(chunked['theme']))
 
-        # Process each sentence
+        # Process each chunk
         prev_entities = []
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
+        for chunk_text in chunks:
+            chunk_text = chunk_text.strip()
+            if not chunk_text:
                 continue
 
-            # Process the sentence using standard parser
-            response = self.process_with_activation(sentence)
-            result['responses'].append(response)
+            # Simplify complex sentences into atomic facts
+            # e.g., "Native to Africa, giraffes have long necks" ->
+            #       ["giraffes is native to Africa", "giraffes have long necks"]
+            simplified_statements = self._advanced_simplifier.simplify(chunk_text)
 
-            # Extract entities from this sentence
-            current_entities = self._extract_entities(sentence)
+            # Process each simplified statement
+            for statement in simplified_statements:
+                statement = statement.strip()
+                if not statement:
+                    continue
 
-            # Strengthen connections between consecutive sentences' entities
+                result['chunks_processed'] += 1
+
+                # Clear clarification context to prevent carry-over between chunks
+                if hasattr(self, 'context'):
+                    self.context.clear_clarification()
+
+                # Set last_subject to theme for pronoun resolution
+                if chunked['theme'] and hasattr(self, 'parser'):
+                    self.parser.last_subject = chunked['theme']
+
+                # Process the statement using parser (already simplified, skip re-simplification)
+                response = self.process_with_activation(statement, already_simplified=True)
+                result['responses'].append(response)
+
+            # Extract entities from this chunk
+            current_entities = self._extract_entities(chunk_text)
+
+            # Strengthen connections between consecutive chunks' entities
             for prev_ent in prev_entities:
                 for curr_ent in current_entities:
                     if prev_ent != curr_ent:

@@ -1,0 +1,313 @@
+================================================================================
+LOOM CONVERSATIONAL LEARNING RESEARCH
+================================================================================
+Date: March 2026
+Focus: Enabling Loom to learn from any conversational input
+
+================================================================================
+1. CURRENT SYSTEM ANALYSIS
+================================================================================
+
+1.1 EXISTING CAPABILITIES
+-------------------------
+
+A. Spreading Activation Network (activation.py)
+   - Collins & Loftus model implementation
+   - Activation spreads to connected nodes with decay (decay_rate=0.12)
+   - Co-activation detection: when multiple sources activate same node
+   - Priming window: 30 seconds standard, 120 seconds for topic concepts
+   - Concept assemblies: clusters that consistently co-activate together
+   - Assembly formation: uses Hebbian principle (fire together, wire together)
+
+B. Inference Engine (inference.py)
+   - Background thread runs every 3 seconds
+   - Transitive chaining for relations: is, causes, leads_to, part_of, looks_like
+   - Property inheritance through category membership
+   - Co-activation processing: finds implicit connections
+   - Hebbian connection strengthening during inference
+   - Provenance tracking for all inferred facts
+
+C. Rule Engine (rules.py)
+   - Forward chaining every 9 seconds
+   - Rule lifecycle: CANDIDATE -> ACTIVE -> SUSPENDED/REJECTED
+   - Learns from:
+     * Explicit "if X then Y" statements
+     * Repeated conversational patterns
+     * Inference patterns that get confirmed
+   - Variable binding with fuzzy matching (singular/plural)
+   - Auto-promotion: rules with 3+ support become active
+
+D. Curiosity Engine (curiosity.py)
+   - Generates questions every 15 seconds
+   - Question types by priority:
+     * Contradictions (10.0)
+     * Rule confirmation (6.0)
+     * Inference confirmation (5.0)
+     * Chain gaps (4.0)
+     * Low confidence (3.0)
+     * Open questions (3.0)
+     * Causal exploration (2.0)
+     * Missing properties (1.0)
+
+E. Existing Relation Types
+   - Categories: is, is_a, type_of, kind_of
+   - Properties: has, can, color, size, shape
+   - Causation: causes, leads_to, results_in
+   - Location: lives_in, found_in
+   - Behavior: eats, needs, produces
+   - Comparison: looks_like, similar_to, related_to
+
+================================================================================
+2. IDENTIFIED GAPS
+================================================================================
+
+2.1 NATURAL CONVERSATION PATTERNS NOT CAPTURED
+----------------------------------------------
+
+Gap 1: Implicit Relationships
+   Current: "dogs are animals" -> stores (dogs, is, animals)
+   Missing: "I love dogs, they're such great companions"
+            -> should infer (dogs, is, companion) or (dogs, has, companionship)
+
+Gap 2: Context Continuation
+   Current: Processes each statement independently
+   Missing: "Dolphins are smart. They use tools." should link "they" to dolphins
+            AND infer dolphins is context for tool use
+
+Gap 3: Temporal Sequences
+   Current: No temporal relation handling
+   Missing: "First X, then Y, finally Z" -> temporal_sequence relations
+
+Gap 4: Comparison Learning
+   Current: "X is like Y" stores looks_like
+   Missing: "X is better than Y at Z" -> comparative_advantage relation
+            "X and Y are both Z" -> shared_category inference
+
+Gap 5: Preference/Opinion Learning
+   Current: Only facts
+   Missing: "I think X" or "X is good for Y" -> opinion/preference relations
+
+Gap 6: Negation Scoping
+   Current: Simple negation (X is not Y)
+   Missing: "Not all X are Y" -> partial_negation
+            "X never Y" vs "X rarely Y" -> frequency relations
+
+Gap 7: Quantifier Handling
+   Current: Treats "some" and "all" the same
+   Missing: "Some birds can't fly" vs "Birds can fly" -> exception relations
+
+2.2 BACKGROUND LEARNING LIMITATIONS
+-----------------------------------
+
+Gap 8: No Active Pattern Discovery
+   - System waits for explicit statements
+   - Should proactively scan for patterns in accumulated knowledge
+   - Example: If many animals have "fur" and "warm-blooded", create rule
+
+Gap 9: No Semantic Clustering
+   - Related concepts aren't automatically grouped
+   - Should discover that {cat, dog, lion} form "pets/mammals" cluster
+
+Gap 10: No Relationship Inference from Co-occurrence
+   - Concepts that appear together repeatedly aren't linked
+   - Should strengthen implicit_association relation
+
+================================================================================
+3. PROPOSED IMPROVEMENTS
+================================================================================
+
+3.1 CONNECTION DISCOVERY SYSTEM
+-------------------------------
+
+New Module: discovery.py
+
+Responsibilities:
+1. Background pattern scanning (every 30 seconds)
+2. Property clustering: find entities sharing 2+ properties
+3. Relation inference: suggest new relations based on patterns
+4. Neuron creation: create bridging concepts (e.g., "furry animals")
+
+Algorithm:
+1. For each property (has, can, etc.):
+   - Find all entities with that property
+   - Cluster by shared additional properties
+   - If cluster size >= 3: propose new category neuron
+
+2. For frequently co-occurring entities:
+   - Track co-occurrence in same statements
+   - If count >= 3: create "associated_with" relation
+   - If sharing category: strengthen "sibling" relation
+
+3. For similar entities (Jaccard similarity >= 0.5):
+   - Auto-create "similar_to" relations
+   - Copy properties with medium confidence
+
+3.2 DISCOURSE LEARNING ENHANCEMENTS
+-----------------------------------
+
+Update: patterns_discourse.py
+
+New Pattern Types:
+
+A. Continuation Markers
+   - "also", "too", "as well" -> additive relation to previous subject
+   - "but", "however" -> contrastive relation
+   - "because", "since" -> causal relation
+   - "so", "therefore" -> consequential relation
+
+B. Reference Resolution
+   - Track last N mentioned entities (currently only 1)
+   - "they", "it", "these" -> resolve to appropriate antecedent
+   - Salience-based: most recently activated entity wins
+
+C. Implicit Subject Continuation
+   - "[Subject]. [Verb phrase]." -> assume same subject
+   - "Dogs are loyal. Very protective." -> Dogs are protective
+
+D. List Learning
+   - "X, Y, and Z are W" -> multiple is relations
+   - "X needs A, B, and C" -> multiple needs relations
+
+3.3 AUTONOMOUS NEURON CREATION
+------------------------------
+
+Rules for Background Neuron Creation:
+
+1. Category Neurons
+   - When 3+ entities share 2+ properties:
+     Create: (new_category, has, shared_property) for each property
+     Link: (each_entity, is, new_category)
+   - Example: cat, dog, lion all have fur and are warm-blooded
+     Create: "furry_mammal" with those properties
+     Link: cat is furry_mammal, dog is furry_mammal, lion is furry_mammal
+
+2. Bridge Neurons (connecting isolated clusters)
+   - When activation spreads through node but no direct relation:
+     Create: "related_through_X" relation
+   - Strengthens over time with repeated co-activation
+
+3. Process Neurons
+   - When causal chains are long: A->B->C->D
+     Create: "process_ABCD" neuron linking start to end
+     Store chain as property
+
+3.4 CONVERSATIONAL LEARNING RULES
+---------------------------------
+
+New rules to capture from conversation:
+
+Rule 1: Exemplar Learning
+   Pattern: "X is a Y. Like Z."
+   Action: Add (Z, is, Y) if not exists
+
+Rule 2: Comparative Learning
+   Pattern: "X is [more/less] Z than Y"
+   Action: Add (X, comparative_Z, Y) with polarity
+
+Rule 3: Causal Discovery
+   Pattern: "X [caused/leads to/results in] Y"
+   Action: Add (X, causes, Y), watch for confirmation
+
+Rule 4: Correction Learning
+   Pattern: "Actually, X" or "No, X"
+   Action: Retract previous, strengthen correction
+
+Rule 5: Confirmation Learning
+   Pattern: "Yes" or "Right" after question
+   Action: Confirm pending inference, boost confidence
+
+Rule 6: Elaboration Learning
+   Pattern: "X means Y" or "X is when Y"
+   Action: Add (X, definition, Y)
+
+================================================================================
+4. IMPLEMENTATION PLAN
+================================================================================
+
+Phase 1: Connection Discovery (Priority: HIGH)
+- Create discovery.py module
+- Implement property clustering algorithm
+- Implement co-occurrence tracking
+- Add background scanning to inference loop
+
+Phase 2: Discourse Enhancement (Priority: HIGH)
+- Extend reference resolution to track N entities
+- Add continuation marker detection
+- Implement implicit subject continuation
+- Add list learning patterns
+
+Phase 3: Autonomous Neurons (Priority: MEDIUM)
+- Implement category neuron creation
+- Implement bridge neuron creation
+- Add process neuron summarization
+- Track neuron provenance
+
+Phase 4: Conversational Rules (Priority: MEDIUM)
+- Add exemplar learning rule
+- Add comparative learning rule
+- Add correction/confirmation handlers
+- Add elaboration detection
+
+================================================================================
+5. TESTING STRATEGY
+================================================================================
+
+Test 1: Multi-topic Conversation Simulation
+Input:
+  "Dogs are loyal animals. They protect their owners."
+  "Cats are independent. They like to hunt."
+  "Both dogs and cats are pets."
+Expected:
+  - dogs, cats -> pets
+  - dogs -> loyal, protective
+  - cats -> independent, hunter
+  - Discover: pets is category containing dogs, cats
+
+Test 2: Causal Chain Discovery
+Input:
+  "Rain makes the ground wet."
+  "Wet ground causes flooding."
+  "Flooding damages homes."
+Expected:
+  - Transitive: rain -> flooding -> damage
+  - Process neuron: rain_to_damage with full chain
+
+Test 3: Pattern Learning
+Input:
+  "Lions eat meat. Tigers eat meat. Wolves eat meat."
+Expected:
+  - After 3rd statement: propose rule
+  - Rule: IF X is predator THEN X eats meat (candidate)
+
+Test 4: Implicit Learning
+Input:
+  "Elephants are the largest land animals."
+  "They have excellent memory."
+  "Very social creatures."
+Expected:
+  - "they" resolves to elephants
+  - "Very social creatures" -> elephants are social
+
+================================================================================
+6. SUCCESS METRICS
+================================================================================
+
+Metric 1: Knowledge Growth Rate
+- Before: Only explicit statements stored
+- Target: 30%+ additional facts from inference/discovery
+
+Metric 2: Connection Density
+- Before: Sparse graph, mostly direct relations
+- Target: 2x connections through discovered relations
+
+Metric 3: Rule Discovery
+- Before: Only explicit "if X then Y"
+- Target: 3+ rules discovered from patterns per conversation
+
+Metric 4: Question Relevance
+- Before: Generic questions
+- Target: 80%+ questions relate to recent conversation
+
+================================================================================
+END OF RESEARCH DOCUMENT
+================================================================================

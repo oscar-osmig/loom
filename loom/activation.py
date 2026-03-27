@@ -15,26 +15,33 @@ class ActivationNetwork:
     """
     Manages spreading activation across the knowledge graph.
     Mimics biological neural activation patterns.
+
+    Enhanced with:
+    - Concept assemblies: clusters of concepts that consistently co-activate
+    - Topic-based priming: longer priming for topic-relevant concepts
+    - Adaptive priming window based on conversation context
     """
 
-    def __init__(self, decay_rate: float = 0.15, spread_factor: float = 0.5,
+    def __init__(self, decay_rate: float = 0.12, spread_factor: float = 0.5,
                  activation_threshold: float = 0.1, max_activation: float = 2.0,
-                 priming_window: float = 10.0):
+                 priming_window: float = 30.0, topic_priming_window: float = 120.0):
         """
         Initialize activation network.
 
         Args:
-            decay_rate: How fast activation decays (0-1)
+            decay_rate: How fast activation decays (0-1) - reduced from 0.15 for slower decay
             spread_factor: How much activation spreads to neighbors (0-1)
             activation_threshold: Minimum activation to spread
             max_activation: Cap on activation level
-            priming_window: Seconds to keep priming active
+            priming_window: Seconds to keep priming active - increased from 10 to 30
+            topic_priming_window: Seconds to keep topic concepts primed (2 minutes)
         """
         self.decay_rate = decay_rate
         self.spread_factor = spread_factor
         self.activation_threshold = activation_threshold
         self.max_activation = max_activation
         self.priming_window = priming_window
+        self.topic_priming_window = topic_priming_window
 
         # Current activation levels: node -> level
         self.activations: Dict[str, float] = defaultdict(float)
@@ -48,6 +55,16 @@ class ActivationNetwork:
 
         # Track activation history for patterns
         self.activation_history: List[Tuple[str, float, float]] = []  # (node, level, time)
+
+        # Concept assemblies: clusters of concepts that consistently activate together
+        # assembly_id -> set of member concepts
+        self.assemblies: Dict[str, Set[str]] = {}
+
+        # Co-activation counts for assembly formation: (node1, node2) -> count
+        self.coactivation_counts: Dict[Tuple[str, str], int] = defaultdict(int)
+
+        # Topic concepts get extended priming
+        self.topic_concepts: Set[str] = set()
 
     def activate(self, node: str, amount: float = 1.0, source: str = None):
         """
@@ -153,21 +170,19 @@ class ActivationNetwork:
         coactivated.sort(key=lambda x: x[1], reverse=True)
         return coactivated
 
-    def is_primed(self, node: str) -> bool:
-        """Check if a node is currently primed (recently activated)."""
-        if node not in self.activation_times:
-            return False
-
-        elapsed = time.time() - self.activation_times[node]
-        return elapsed < self.priming_window
-
     def get_primed_nodes(self) -> List[str]:
-        """Get all currently primed nodes."""
+        """Get all currently primed nodes (including topic concepts with extended window)."""
         now = time.time()
-        return [
-            node for node, timestamp in self.activation_times.items()
-            if now - timestamp < self.priming_window
-        ]
+        primed = []
+        for node, timestamp in self.activation_times.items():
+            elapsed = now - timestamp
+            # Topic concepts get extended priming
+            if node in self.topic_concepts:
+                if elapsed < self.topic_priming_window:
+                    primed.append(node)
+            elif elapsed < self.priming_window:
+                primed.append(node)
+        return primed
 
     def get_activation(self, node: str) -> float:
         """Get current activation level of a node."""
@@ -209,6 +224,11 @@ class ActivationNetwork:
         # Activate all input entities
         for entity in entities:
             self.activate(entity, amount=1.0)
+            # Also activate assembly members
+            self.activate_assembly(entity, amount=0.3)
+
+        # Track co-activation for assembly formation
+        self.track_coactivation(entities)
 
         # Spread activation (multiple rounds for deeper spread)
         for _ in range(2):
@@ -278,5 +298,122 @@ class ActivationNetwork:
             "activations": dict(self.activations),
             "sources": {k: list(v) for k, v in self.activation_sources.items()},
             "primed": self.get_primed_nodes(),
-            "top_activated": self.get_top_activated(5)
+            "top_activated": self.get_top_activated(5),
+            "assemblies": {k: list(v) for k, v in self.assemblies.items()},
+            "topic_concepts": list(self.topic_concepts)
         }
+
+    def set_topic(self, concepts: List[str]):
+        """
+        Set topic concepts for extended priming.
+        Topic concepts stay primed much longer (topic_priming_window).
+        """
+        self.topic_concepts = set(concepts)
+        # Activate topic concepts
+        for concept in concepts:
+            self.activate(concept, amount=0.5)
+
+    def add_topic_concept(self, concept: str):
+        """Add a single concept to the topic set."""
+        self.topic_concepts.add(concept)
+
+    def is_primed(self, node: str) -> bool:
+        """
+        Check if a node is currently primed (recently activated).
+        Topic concepts use extended priming window.
+        """
+        if node not in self.activation_times:
+            return False
+
+        elapsed = time.time() - self.activation_times[node]
+
+        # Topic concepts get extended priming
+        if node in self.topic_concepts:
+            return elapsed < self.topic_priming_window
+
+        return elapsed < self.priming_window
+
+    def track_coactivation(self, nodes: List[str]):
+        """
+        Track that these nodes were co-activated together.
+        Used to form concept assemblies over time.
+        """
+        if len(nodes) < 2:
+            return
+
+        # Track pairwise co-activation
+        for i, node1 in enumerate(nodes):
+            for node2 in nodes[i + 1:]:
+                pair = tuple(sorted([node1, node2]))
+                self.coactivation_counts[pair] += 1
+
+    def form_assemblies(self, min_coactivation: int = 3) -> List[Set[str]]:
+        """
+        Form concept assemblies from frequently co-activated pairs.
+        Like Hebbian cell assemblies - concepts that fire together wire together.
+
+        Args:
+            min_coactivation: Minimum co-activation count to form assembly
+
+        Returns:
+            List of newly formed assemblies
+        """
+        new_assemblies = []
+
+        # Find strongly connected pairs
+        strong_pairs = [
+            pair for pair, count in self.coactivation_counts.items()
+            if count >= min_coactivation
+        ]
+
+        if not strong_pairs:
+            return new_assemblies
+
+        # Build connected components from strong pairs
+        # Each component becomes an assembly
+        visited = set()
+        for pair in strong_pairs:
+            if pair[0] in visited and pair[1] in visited:
+                continue
+
+            # BFS to find connected component
+            assembly = set()
+            queue = list(pair)
+            while queue:
+                node = queue.pop(0)
+                if node in assembly:
+                    continue
+                assembly.add(node)
+                visited.add(node)
+
+                # Find other strong connections
+                for other_pair in strong_pairs:
+                    if node in other_pair:
+                        other = other_pair[0] if other_pair[1] == node else other_pair[1]
+                        if other not in assembly:
+                            queue.append(other)
+
+            if len(assembly) >= 2:
+                assembly_id = f"asm_{len(self.assemblies)}"
+                self.assemblies[assembly_id] = assembly
+                new_assemblies.append(assembly)
+
+        return new_assemblies
+
+    def get_assembly_for(self, concept: str) -> Optional[Set[str]]:
+        """Get the assembly that contains a concept, if any."""
+        for assembly in self.assemblies.values():
+            if concept in assembly:
+                return assembly
+        return None
+
+    def activate_assembly(self, concept: str, amount: float = 0.3):
+        """
+        When a concept is activated, also activate its assembly members.
+        This creates the 'chunking' effect where related concepts prime together.
+        """
+        assembly = self.get_assembly_for(concept)
+        if assembly:
+            for member in assembly:
+                if member != concept:
+                    self.activate(member, amount=amount, source=concept)

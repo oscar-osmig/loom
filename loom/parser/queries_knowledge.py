@@ -5,7 +5,111 @@ Handles domain-specific knowledge queries about biology, classification, and cha
 
 import re
 from ..normalizer import normalize, prettify
-from ..grammar import is_plural, format_list
+from ..grammar import is_plural, format_list, singularize, pluralize
+
+
+# Bridge relations that indicate related categories
+BRIDGE_RELATIONS = ["equivalent_to", "overlaps_with", "similar_to", "subset_of"]
+
+
+def _get_category_instances(parser, category: str) -> list:
+    """
+    Get all instances of a category, including instances from bridged categories.
+
+    Bridge behavior (logically sound):
+    - equivalent_to: These are synonyms, share ALL instances (bidirectional)
+    - subset_of: A subset_of B means A's instances are also B's instances
+      - When querying A: return A's instances only
+      - When querying B: return B's instances + all subset categories' instances
+    - overlaps_with: Categories share SOME instances, but not all
+      - Only include instances that actually belong to BOTH categories
+    - similar_to: Weak connection, don't auto-include instances
+
+    Args:
+        parser: The Parser instance
+        category: The category to look up
+
+    Returns:
+        List of instance names
+    """
+    instances = set()
+    checked_categories = set()
+
+    def get_direct_instances(cat: str) -> set:
+        """Get direct instances of a single category (no bridging)."""
+        result = set()
+
+        # Direct has_instance
+        direct = parser.loom.get(cat, "has_instance") or []
+        result.update(direct)
+
+        # Try singular/plural variants
+        singular = singularize(cat)
+        plural = pluralize(cat)
+        for variant in [singular, plural]:
+            if variant != cat:
+                variant_instances = parser.loom.get(variant, "has_instance") or []
+                result.update(variant_instances)
+
+        # Check entities where entity "is" this category
+        cat_norm = normalize(cat)
+        for entity in parser.loom.knowledge.keys():
+            if entity == "self":
+                continue
+            is_targets = parser.loom.get(entity, "is") or []
+            for target in is_targets:
+                if normalize(target) == cat_norm:
+                    result.add(entity)
+                    break
+
+        return result
+
+    def collect_instances(cat: str, depth: int = 0):
+        """Recursively collect instances from a category and its bridges."""
+        if cat in checked_categories or depth > 2:
+            return
+        checked_categories.add(cat)
+
+        # Get direct instances of this category
+        direct = get_direct_instances(cat)
+        instances.update(direct)
+
+        # Handle equivalent_to (synonyms): include all instances
+        equiv_cats = parser.loom.get(cat, "equivalent_to") or []
+        for equiv_cat in equiv_cats:
+            if equiv_cat not in checked_categories:
+                collect_instances(equiv_cat, depth + 1)
+
+        # Handle subset_of: if other categories are subsets of this one,
+        # include their instances (since A ⊂ B means A's instances are B's instances)
+        # We need to find categories where X subset_of this_category
+        for other_cat in parser.loom.knowledge.keys():
+            subset_targets = parser.loom.get(other_cat, "subset_of") or []
+            if cat in subset_targets and other_cat not in checked_categories:
+                # other_cat is a subset of cat, include its instances
+                other_instances = get_direct_instances(other_cat)
+                instances.update(other_instances)
+                checked_categories.add(other_cat)
+
+        # Handle overlaps_with: ONLY include the SHARED instances
+        # (instances that belong to BOTH categories)
+        overlap_cats = parser.loom.get(cat, "overlaps_with") or []
+        for overlap_cat in overlap_cats:
+            if overlap_cat not in checked_categories:
+                overlap_instances = get_direct_instances(overlap_cat)
+                # Find instances that are in BOTH categories
+                shared = direct & overlap_instances
+                instances.update(shared)
+                # Don't add overlap_cat to checked_categories so we can still
+                # process it directly if needed
+
+        # similar_to: Don't auto-include instances (too weak a connection)
+        # The user can query the similar category directly if interested
+
+    # Start collection from the original category
+    collect_instances(category)
+
+    return list(instances)
 
 
 def _check_reproduce_query(parser, t: str) -> str | None:
@@ -64,6 +168,8 @@ def _check_classification_query(parser, t: str) -> str | None:
 
 def _check_examples_query(parser, t: str) -> str | None:
     """Handle 'what are examples of X?' queries."""
+    from ..normalizer import normalize, prettify
+
     patterns = [
         r"what\s+(?:are\s+)?(?:two|some|a\s+few)\s+examples?\s+of\s+(.+)",  # Moved first - more specific
         r"what\s+(?:are\s+)?(?:some\s+)?(?:examples?\s+of|types?\s+of)\s+(.+)",
@@ -83,10 +189,22 @@ def _check_examples_query(parser, t: str) -> str | None:
     if not subj:
         return None
 
-    # Look for example facts (try singular/plural)
-    examples = parser._try_get(subj, "example")
+    category = normalize(subj)
+    examples = []
+
+    # 1. Check "example" relation
+    example_facts = parser._try_get(subj, "example")
+    if example_facts:
+        examples.extend(example_facts)
+
+    # 2. Get instances using the helper (includes bridged categories)
+    instances = _get_category_instances(parser, subj)
+    for inst in instances:
+        if inst not in examples:
+            examples.append(inst)
+
     if examples:
-        display = [e.replace("_", " ") for e in examples]
+        display = [prettify(e).replace("_", " ") for e in examples]
         return f"Examples of {subj}: {format_list(display)}."
 
     return f"I don't know any examples of {subj}."
@@ -336,8 +454,6 @@ def _check_differ_query(parser, t: str) -> str | None:
 
 def _check_what_query(parser, t: str) -> str | None:
     """Handle 'what is X?' or 'what are X?' or 'what X are Y?' queries."""
-    from ..grammar import format_what_response
-
     if not t.startswith("what "):
         return None
 
@@ -388,25 +504,75 @@ def _check_what_query(parser, t: str) -> str | None:
     parser.last_subject = subj
     parser.loom.context.update(subject=subj)
 
+    # FIRST: Check for "is" relations (what category is this?)
+    # e.g., "what are cats?" -> cats are mammals
+    # This takes priority because users usually ask "what are X?" to learn ABOUT X
     facts = parser.loom.get(subj, "is")
     if facts:
-        # Build a rich response including abilities
+        # Build a rich response including all categories
         verb = "are" if is_plural(subj) else "is"
-        category = facts[0].replace("_", " ")
+        # Return all facts, not just the first one
+        categories = [f.replace("_", " ") for f in facts]
 
         # Check for cannot abilities to add context
         cannot = parser.loom.get(subj, "cannot") or []
         can = parser.loom.get(subj, "can") or []
 
+        if len(categories) == 1:
+            category_str = categories[0]
+        else:
+            category_str = format_list(categories)
+
         if cannot:
             inability = cannot[0].replace("_", " ")
-            return f"{subj.title()} {verb} {category} that cannot {inability}."
+            return f"{subj.title()} {verb} {category_str} that cannot {inability}."
         elif can:
             ability = can[0].replace("_", " ")
-            return f"{subj.title()} {verb} {category} that can {ability}."
+            return f"{subj.title()} {verb} {category_str} that can {ability}."
         else:
-            return format_what_response(subj, facts[0])
-    else:
-        parser.loom.add_fact(subj, "has_open_question", "identity")
+            return f"{subj.title()} {verb} {category_str}."
+
+    # Check for properties as an alternative to "is" relations
+    properties = parser.loom.get(subj, "has_property") or []
+    if properties:
         verb = "are" if is_plural(subj) else "is"
-        return f"I don't know what {subj} {verb} yet. Can you tell me?"
+        prop_display = [p.replace("_", " ") for p in properties]
+        return f"{subj.title()} {verb} {format_list(prop_display)}."
+
+    # Check if it differs from something (comparative relation)
+    differs = parser.loom.get(subj, "differs_from") or []
+    if differs:
+        verb = "are" if is_plural(subj) else "is"
+        return f"{subj.title()} {verb} different from {format_list(differs)}."
+
+    # FALLBACK: Check if subj is a category with instances (reverse lookup)
+    # e.g., "what are mammals?" -> find all X where X is mammals (dogs, cats)
+    # Only used when the subject has no direct "is" relation
+    instances = _get_category_instances(parser, subj)
+    if instances:
+        # Found instances - this is a category, return the instances
+        instance_names = [prettify(i) for i in instances]
+        if len(instance_names) == 1:
+            return f"{instance_names[0].title()} is a {subj}."
+        else:
+            return f"{format_list([n.title() for n in instance_names])} are {subj}."
+
+    parser.loom.add_fact(subj, "has_open_question", "identity")
+
+    # Create curiosity node for unknown concept
+    if hasattr(parser.loom, 'curiosity_nodes'):
+        parser.loom.curiosity_nodes.create_node(subj, context=f"User asked: what are {subj}?")
+        # Try to explore and generate hypotheses
+        parser.loom.curiosity_nodes.explore_node(subj)
+        hypotheses = parser.loom.curiosity_nodes.generate_hypotheses(subj)
+
+        if hypotheses:
+            # Return best guess
+            best = hypotheses[0]
+            rel_display = best['relation'].replace('_', ' ')
+            obj_display = best['object'].replace('_', ' ')
+            return (f"I don't know about '{subj}' yet, but based on similar concepts, "
+                    f"it might {rel_display} {obj_display}. Can you tell me more?")
+
+    verb = "are" if is_plural(subj) else "is"
+    return f"I don't know what {subj} {verb} yet. Can you tell me?"

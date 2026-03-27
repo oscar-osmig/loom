@@ -14,6 +14,11 @@ def _check_clarification_response(parser, t: str) -> str | None:
     if not parser.loom.context.pending_clarification:
         return None
 
+    # Don't treat questions as clarification responses
+    if parser._is_question(t):
+        parser.loom.context.clear_clarification()
+        return None
+
     clarification = parser.loom.context.pending_clarification
     about = clarification["about"]
 
@@ -257,9 +262,70 @@ def _check_however_pattern(parser, t: str) -> str | None:
 
 
 def _check_because_pattern(parser, t: str) -> str | None:
-    """Handle 'Because X, Y' or 'Since X, Y' patterns."""
-    # Match "because X, Y" or "since X, Y"
+    """Handle 'Because X, Y', 'Since X, Y', or 'X because Y' patterns."""
+    # Pattern 1: "because X, Y" or "since X, Y" at the START
     match = re.match(r"(?:because|since)\s+(.+?),\s*(.+)", t, re.IGNORECASE)
+
+    # Pattern 2: "X because Y" - because in the MIDDLE
+    if not match and " because " in t:
+        parts = t.split(" because ", 1)
+        if len(parts) == 2:
+            main_statement = parts[0].strip()
+            reason = parts[1].strip()
+
+            # Process the main statement first
+            # Handle "X is/are Y because Z"
+            is_match = re.match(r"(.+?)\s+(is|are)\s+(.+)", main_statement)
+            if is_match:
+                subj = is_match.group(1).strip()
+                verb = is_match.group(2)
+                obj = is_match.group(3).strip()
+
+                # Clean up subject
+                for prefix in ["the ", "a ", "an "]:
+                    if subj.startswith(prefix):
+                        subj = subj[len(prefix):]
+
+                # Store the main fact
+                if is_adjective(obj.split()[0] if obj else ""):
+                    parser.loom.add_fact(subj, "has_property", obj)
+                else:
+                    parser.loom.add_fact(subj, "is", obj)
+
+                # Store the reason as a property of the subject
+                parser.loom.add_fact(subj, "because", reason)
+
+                parser.last_subject = subj
+                parser.loom.context.update(subject=subj)
+
+                return f"Got it, {subj} {verb} {obj}."
+
+            # Handle "X verb Y because Z" (other verbs)
+            verb_match = re.match(r"(.+?)\s+(use|uses|need|needs|have|has|can|produce|produces)\s+(.+)", main_statement)
+            if verb_match:
+                subj = verb_match.group(1).strip()
+                verb = verb_match.group(2).strip()
+                obj = verb_match.group(3).strip()
+
+                # Map verb to relation
+                verb_map = {
+                    "use": "uses", "uses": "uses",
+                    "need": "needs", "needs": "needs",
+                    "have": "has", "has": "has",
+                    "can": "can",
+                    "produce": "produces", "produces": "produces",
+                }
+                relation = verb_map.get(verb, verb)
+
+                parser.loom.add_fact(subj, relation, obj)
+                parser.loom.add_fact(subj, "because", reason)
+
+                parser.last_subject = subj
+                return f"Got it, {subj} {verb} {obj}."
+
+            # Fallback: just store the reason connection
+            return None
+
     if not match:
         return None
 

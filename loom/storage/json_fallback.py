@@ -1,11 +1,29 @@
 """
 JSON Fallback storage backend for Loom.
 Used when MongoDB is not available.
+
+Supports Quad + Properties schema:
+- subject, relation, object, context (the quad)
+- properties: {confidence, temporal, scope, conditions, source_type, ...}
 """
 
 from collections import defaultdict
+from datetime import datetime
 import json
 import os
+
+# Default context for facts without explicit context
+DEFAULT_CONTEXT = "general"
+
+# Default properties template
+DEFAULT_PROPERTIES = {
+    "confidence": "high",
+    "temporal": "always",      # always, sometimes, past, future
+    "scope": "universal",      # universal, typical, specific
+    "conditions": [],
+    "source_type": "user",
+    "created_at": None,
+}
 
 
 class JSONFallbackStorage:
@@ -14,7 +32,7 @@ class JSONFallbackStorage:
     Used when MongoDB is not available.
     """
 
-    def __init__(self, memory_file: str = "loom_memory.json"):
+    def __init__(self, memory_file: str = "loom_memory/loom_memory.json"):
         self.memory_file = memory_file
         self._data = self._load()
 
@@ -68,26 +86,100 @@ class JSONFallbackStorage:
             json.dump(self._data, f, indent=2, ensure_ascii=False)
 
     def add_fact(self, subject: str, relation: str, obj: str,
-                 confidence: str = "high", constraints: list = None) -> bool:
+                 confidence: str = "high", constraints: list = None,
+                 provenance: dict = None, context: str = None,
+                 properties: dict = None) -> bool:
+        """
+        Add a fact with Quad + Properties schema.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            confidence: Confidence level (legacy, moved to properties)
+            constraints: Constraints (legacy, moved to properties.conditions)
+            provenance: Provenance dict (legacy, merged into properties)
+            context: Context for the fact (general, domestic, scientific, etc.)
+            properties: Full properties dict with temporal, scope, etc.
+        """
+        ctx = context or DEFAULT_CONTEXT
+
+        # Check for existing fact (same subject, relation, object, context)
         for fact in self._data["facts"]:
             if (fact["subject"] == subject and
                 fact["relation"] == relation and
-                fact["object"] == obj):
+                fact["object"] == obj and
+                fact.get("context", DEFAULT_CONTEXT) == ctx):
                 return False
+
+        # Build properties from new format or legacy parameters
+        props = dict(DEFAULT_PROPERTIES)
+        props["created_at"] = datetime.utcnow().isoformat()
+
+        if properties:
+            # New format - use provided properties
+            props.update(properties)
+        else:
+            # Legacy format - convert to properties
+            props["confidence"] = confidence
+            props["conditions"] = constraints or []
+            if provenance:
+                props["source_type"] = provenance.get("source_type", "user")
+                props["premises"] = provenance.get("premises", [])
+                props["rule_id"] = provenance.get("rule_id")
+                props["speaker_id"] = provenance.get("speaker_id")
+                props["derivation_id"] = provenance.get("derivation_id")
 
         self._data["facts"].append({
             "subject": subject,
             "relation": relation,
             "object": obj,
-            "confidence": confidence,
-            "constraints": constraints or []
+            "context": ctx,
+            "properties": props
         })
         self._save()
         return True
 
-    def get_facts(self, subject: str, relation: str) -> list:
-        return [f["object"] for f in self._data["facts"]
-                if f["subject"] == subject and f["relation"] == relation]
+    def _normalize_fact(self, fact: dict) -> dict:
+        """Normalize a fact to Quad + Properties format (for backward compat)."""
+        if "context" not in fact:
+            fact["context"] = DEFAULT_CONTEXT
+        if "properties" not in fact:
+            # Convert legacy format
+            fact["properties"] = {
+                "confidence": fact.get("confidence", "high"),
+                "temporal": "always",
+                "scope": "universal",
+                "conditions": fact.get("constraints", []),
+                "source_type": fact.get("provenance", {}).get("source_type", "user"),
+                "created_at": fact.get("provenance", {}).get("created_at"),
+                "premises": fact.get("provenance", {}).get("premises", []),
+            }
+        return fact
+
+    def get_facts(self, subject: str, relation: str, context: str = None) -> list:
+        """Get facts, optionally filtered by context."""
+        results = []
+        for f in self._data["facts"]:
+            if f["subject"] == subject and f["relation"] == relation:
+                f = self._normalize_fact(f)
+                # If context specified, filter by it
+                if context is None or f.get("context", DEFAULT_CONTEXT) == context:
+                    results.append(f["object"])
+        return results
+
+    def get_facts_with_context(self, subject: str, relation: str) -> list:
+        """Get facts with their context and properties."""
+        results = []
+        for f in self._data["facts"]:
+            if f["subject"] == subject and f["relation"] == relation:
+                f = self._normalize_fact(f)
+                results.append({
+                    "object": f["object"],
+                    "context": f.get("context", DEFAULT_CONTEXT),
+                    "properties": f.get("properties", {})
+                })
+        return results
 
     def get_all_facts_for_subject(self, subject: str) -> dict:
         result = defaultdict(list)
@@ -96,7 +188,118 @@ class JSONFallbackStorage:
                 result[f["relation"]].append(f["object"])
         return dict(result)
 
-    def retract_fact(self, subject: str, relation: str, obj: str) -> bool:
+    def remove_entity(self, entity: str) -> int:
+        """
+        Remove all facts where entity is the SUBJECT only.
+        Does NOT remove facts where entity is the object (to preserve valid relations).
+        Used for cleaning up junk neurons.
+
+        Returns:
+            Number of facts removed
+        """
+        original_count = len(self._data["facts"])
+        # Only remove facts where entity is the subject
+        self._data["facts"] = [
+            f for f in self._data["facts"]
+            if f["subject"] != entity
+        ]
+        removed = original_count - len(self._data["facts"])
+        if removed > 0:
+            self._save()
+        return removed
+
+    def get_fact_with_metadata(self, subject: str, relation: str, obj: str,
+                                context: str = None) -> dict | None:
+        """Get a specific fact with all its metadata."""
+        for f in self._data["facts"]:
+            if (f["subject"] == subject and
+                f["relation"] == relation and
+                f["object"] == obj):
+                f = self._normalize_fact(f)
+                if context is None or f.get("context", DEFAULT_CONTEXT) == context:
+                    return f
+        return None
+
+    def get_facts_by_source_type(self, source_type: str) -> list:
+        """Get all facts with a specific source type."""
+        results = []
+        for f in self._data["facts"]:
+            f = self._normalize_fact(f)
+            # Check both new properties format and legacy provenance
+            src = f.get("properties", {}).get("source_type")
+            if src is None:
+                src = f.get("provenance", {}).get("source_type")
+            if src == source_type:
+                results.append(f)
+        return results
+
+    def get_facts_depending_on(self, subject: str, relation: str, obj: str) -> list:
+        """
+        Get all facts that depend on the given fact as a premise.
+        Used for truth maintenance.
+        """
+        dependents = []
+        for f in self._data["facts"]:
+            f = self._normalize_fact(f)
+            # Check both new properties format and legacy provenance
+            premises = f.get("properties", {}).get("premises", [])
+            if not premises:
+                premises = f.get("provenance", {}).get("premises", [])
+            for p in premises:
+                if (p.get("subject") == subject and
+                    p.get("relation") == relation and
+                    p.get("object") == obj):
+                    dependents.append(f)
+                    break
+        return dependents
+
+    def get_inferred_facts(self) -> list:
+        """Get all facts that were inferred (not directly stated by user)."""
+        results = []
+        for f in self._data["facts"]:
+            f = self._normalize_fact(f)
+            src = f.get("properties", {}).get("source_type")
+            if src is None:
+                src = f.get("provenance", {}).get("source_type")
+            if src in ["inference", "inheritance"]:
+                results.append(f)
+        return results
+
+    def retract_fact(self, subject: str, relation: str, obj: str,
+                     cascade: bool = False) -> dict:
+        """
+        Remove a fact from the knowledge graph.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            cascade: If True, also retract all facts that depend on this fact
+
+        Returns:
+            dict with 'retracted' (bool) and 'cascade_count' (int) keys
+        """
+        result = {"retracted": False, "cascade_count": 0, "cascaded_facts": []}
+
+        # First, find dependents if cascade is enabled
+        if cascade:
+            dependents = self.get_facts_depending_on(subject, relation, obj)
+            for dep in dependents:
+                # Recursively retract dependent facts
+                sub_result = self.retract_fact(
+                    dep["subject"], dep["relation"], dep["object"],
+                    cascade=True
+                )
+                if sub_result["retracted"]:
+                    result["cascade_count"] += 1 + sub_result["cascade_count"]
+                    result["cascaded_facts"].append({
+                        "subject": dep["subject"],
+                        "relation": dep["relation"],
+                        "object": dep["object"]
+                    })
+                    result["cascaded_facts"].extend(sub_result["cascaded_facts"])
+
+        # Now delete the actual fact
         original_len = len(self._data["facts"])
         self._data["facts"] = [
             f for f in self._data["facts"]
@@ -106,15 +309,21 @@ class JSONFallbackStorage:
         ]
         if len(self._data["facts"]) < original_len:
             self._save()
-            return True
-        return False
+            result["retracted"] = True
+
+        return result
 
     def get_constraints(self, subject: str, relation: str, obj: str) -> list:
         for f in self._data["facts"]:
             if (f["subject"] == subject and
                 f["relation"] == relation and
                 f["object"] == obj):
-                return f.get("constraints", [])
+                f = self._normalize_fact(f)
+                # Check new format first, then legacy
+                conditions = f.get("properties", {}).get("conditions", [])
+                if not conditions:
+                    conditions = f.get("constraints", [])
+                return conditions
         return []
 
     def add_constraint(self, subject: str, relation: str, obj: str, constraint: str):
@@ -122,10 +331,14 @@ class JSONFallbackStorage:
             if (f["subject"] == subject and
                 f["relation"] == relation and
                 f["object"] == obj):
-                if "constraints" not in f:
-                    f["constraints"] = []
-                if constraint not in f["constraints"]:
-                    f["constraints"].append(constraint)
+                f = self._normalize_fact(f)
+                conditions = f.get("properties", {}).get("conditions", [])
+                if constraint not in conditions:
+                    if "properties" not in f:
+                        f["properties"] = dict(DEFAULT_PROPERTIES)
+                    if "conditions" not in f["properties"]:
+                        f["properties"]["conditions"] = []
+                    f["properties"]["conditions"].append(constraint)
                     self._save()
                 return
 
@@ -134,7 +347,12 @@ class JSONFallbackStorage:
             if (f["subject"] == subject and
                 f["relation"] == relation and
                 f["object"] == obj):
-                return f.get("confidence", "medium")
+                f = self._normalize_fact(f)
+                # Check new format first, then legacy
+                conf = f.get("properties", {}).get("confidence")
+                if conf is None:
+                    conf = f.get("confidence", "medium")
+                return conf
         return "medium"
 
     def update_confidence(self, subject: str, relation: str, obj: str, confidence: str):
@@ -142,7 +360,10 @@ class JSONFallbackStorage:
             if (f["subject"] == subject and
                 f["relation"] == relation and
                 f["object"] == obj):
-                f["confidence"] = confidence
+                f = self._normalize_fact(f)
+                if "properties" not in f:
+                    f["properties"] = dict(DEFAULT_PROPERTIES)
+                f["properties"]["confidence"] = confidence
                 self._save()
                 return
 

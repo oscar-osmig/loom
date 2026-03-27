@@ -238,12 +238,13 @@
             resize: none;
             outline: none;
             min-height: 24px;
-            max-height: 150px;
-            line-height: 1.5;
-            padding: 0.75rem;
-            padding-right: 5rem;
-            padding-bottom: 0.75rem;
+            max-height: 200px;
+            line-height: 1.6;
+            padding: 0.875rem 1rem;
+            padding-right: 5.5rem;
             box-sizing: border-box;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
 
         .input-wrapper textarea::placeholder {
@@ -281,33 +282,6 @@
             color: var(--text-muted);
             cursor: not-allowed;
             transform: none;
-        }
-
-        /* Quick commands */
-        .quick-commands {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 0.75rem;
-            flex-wrap: wrap;
-            padding: 0 0.25rem;
-        }
-
-        .quick-cmd {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            color: var(--text-secondary);
-            padding: 0.375rem 0.875rem;
-            border-radius: 100px;
-            font-size: 0.8125rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .quick-cmd:hover {
-            background: var(--bg-tertiary);
-            border-color: var(--accent);
-            color: var(--text-primary);
         }
 
         /* Loading indicator */
@@ -409,6 +383,122 @@
             color: var(--accent-hover);
         }
 
+        /* Info Panel (popup for commands like show, activation, weights) */
+        .info-panel {
+            position: fixed;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 300px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            border-radius: 0;
+            box-shadow: 4px 0 24px rgba(0, 0, 0, 0.3);
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+            animation: slideInLeft 0.3s ease;
+        }
+
+        .info-panel.active {
+            display: flex;
+        }
+
+        @keyframes slideInLeft {
+            from { opacity: 0; transform: translateX(-20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .info-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.25rem;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .info-panel-header h3 {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .info-panel-header h3::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        .info-panel-close {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .info-panel-close:hover {
+            background: var(--bg-primary);
+            border-color: var(--error);
+            color: var(--error);
+        }
+
+        .info-panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 1.25rem;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8125rem;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            /* Invisible scrollbar */
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* IE/Edge */
+        }
+
+        .info-panel-content::-webkit-scrollbar {
+            display: none; /* Chrome/Safari/Opera */
+        }
+
+        .info-panel-content b {
+            color: var(--accent-hover);
+            font-weight: 600;
+        }
+
+        /* Mobile: panel at bottom */
+        @media (max-width: 768px) {
+            .info-panel {
+                left: 0;
+                right: 0;
+                bottom: 0;
+                top: auto;
+                width: auto;
+                max-height: 50vh;
+                border-right: none;
+                border-top: 1px solid var(--border);
+                border-radius: 16px 16px 0 0;
+                box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
+            }
+
+            @keyframes slideInLeft {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+        }
+
         /* Confirm dialog */
         .confirm-overlay {
             display: none;
@@ -487,6 +577,402 @@
             background: #dc2626;
         }
 
+        /* Neural Visualization Overlay */
+        .viz-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 200;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .viz-overlay.active {
+            display: flex;
+        }
+
+        .viz-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        .viz-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 1.5rem;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+            z-index: 10;
+        }
+
+        .viz-header > .viz-title {
+            flex: 1;
+        }
+
+        .viz-header > .viz-search {
+            flex: 0 0 auto;
+        }
+
+        .viz-header > .viz-header-right {
+            flex: 1;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .viz-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .viz-title::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: var(--accent);
+            border-radius: 50%;
+            box-shadow: 0 0 12px var(--accent);
+        }
+
+        .viz-close {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .viz-close:hover {
+            background: var(--bg-primary);
+            border-color: var(--error);
+            color: var(--error);
+        }
+
+        .viz-search {
+            position: relative;
+            display: flex;
+            align-items: center;
+            background: rgba(30, 30, 30, 0.8);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 0.75rem;
+            gap: 0.5rem;
+            transition: border-color 0.2s;
+        }
+
+        .viz-search:focus-within {
+            border-color: var(--accent);
+        }
+
+        .viz-search svg {
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .viz-search input {
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            width: 160px;
+            font-family: inherit;
+        }
+
+        .viz-search input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .viz-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            margin-top: 4px;
+            background: rgba(26, 26, 26, 0.98);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+            z-index: 30;
+        }
+
+        .viz-search-results.active {
+            display: block;
+        }
+
+        .viz-search-result {
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: background 0.15s;
+        }
+
+        .viz-search-result:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .viz-search-result .count {
+            color: var(--accent);
+            font-size: 0.7rem;
+            margin-left: auto;
+        }
+
+        .viz-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .viz-legend {
+            position: absolute;
+            bottom: 1.5rem;
+            left: 1.5rem;
+            background: rgba(26, 26, 26, 0.9);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .viz-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .viz-legend-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .viz-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .viz-legend-dot.neuron {
+            background: #6366f1;
+            box-shadow: 0 0 8px #6366f1;
+        }
+
+        .viz-legend-dot.synapse {
+            background: #8c9cc8;
+            box-shadow: 0 0 6px #8c9cc8;
+        }
+
+        .viz-stats {
+            position: absolute;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            background: rgba(26, 26, 26, 0.9);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-align: right;
+        }
+
+        .viz-stats-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .viz-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+        }
+
+        .viz-empty svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        /* Neuron Detail Popup */
+        .neuron-popup {
+            position: absolute;
+            background: rgba(26, 26, 26, 0.98);
+            border: 1px solid var(--accent);
+            border-radius: 12px;
+            padding: 1rem;
+            min-width: 220px;
+            max-width: 300px;
+            max-height: 350px;
+            overflow: hidden;
+            display: none;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(99, 102, 241, 0.3);
+            z-index: 20;
+            animation: popIn 0.2s ease;
+        }
+
+        .neuron-popup.active {
+            display: flex;
+        }
+
+        @keyframes popIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .neuron-popup-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .neuron-popup-body {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            /* Invisible scrollbar - Firefox */
+            scrollbar-width: none;
+            /* Invisible scrollbar - IE/Edge */
+            -ms-overflow-style: none;
+        }
+
+        /* Invisible scrollbar - Chrome/Safari/Opera */
+        .neuron-popup-body::-webkit-scrollbar {
+            width: 0;
+            display: none;
+        }
+
+        .neuron-popup-title {
+            font-weight: 600;
+            color: var(--accent-hover);
+            font-size: 0.95rem;
+        }
+
+        .neuron-popup-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px;
+        }
+
+        .neuron-popup-close:hover {
+            color: var(--error);
+        }
+
+        .neuron-popup-section {
+            margin-bottom: 0.5rem;
+        }
+
+        .neuron-popup-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .neuron-popup-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.25rem;
+        }
+
+        .neuron-popup-item {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding: 0.2rem 0;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .neuron-popup-item .relation {
+            color: #a855f7;
+            font-size: 0.7rem;
+        }
+
+        .neuron-popup-item .target {
+            color: var(--text-primary);
+        }
+
+        /* Discovery visualization */
+        .viz-discovery-status {
+            position: absolute;
+            top: 5rem;
+            right: 1.5rem;
+            background: rgba(26, 26, 26, 0.9);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .viz-discovery-status.discovering {
+            border-color: #22c55e;
+        }
+
+        .discovery-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .discovery-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--text-muted);
+        }
+
+        .discovery-dot.active {
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+            animation: discoveryPulse 1s infinite;
+        }
+
+        @keyframes discoveryPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+
+        .discovery-count {
+            margin-top: 0.5rem;
+            font-size: 0.7rem;
+            color: #22c55e;
+            line-height: 1.4;
+        }
+
         /* Mobile responsiveness */
         @media (max-width: 640px) {
             .header {
@@ -529,6 +1015,17 @@
                 </svg>
                 <span>Stats</span>
             </button>
+            <button class="header-btn" onclick="showVisualization()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <circle cx="4" cy="6" r="2"/>
+                    <circle cx="20" cy="6" r="2"/>
+                    <circle cx="4" cy="18" r="2"/>
+                    <circle cx="20" cy="18" r="2"/>
+                    <path d="M9.5 10.5L5.5 7.5M14.5 10.5L18.5 7.5M9.5 13.5L5.5 16.5M14.5 13.5L18.5 16.5"/>
+                </svg>
+                <span>Visualize</span>
+            </button>
             <button class="header-btn danger" onclick="showClearConfirm()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
@@ -542,7 +1039,7 @@
         <div class="messages" id="messages">
             <div class="welcome">
                 <h2>Welcome to Loom</h2>
-                <p>Teach me facts, ask questions, or paste paragraphs. I'll weave them into a connected knowledge graph. Type <b>help</b> for commands.</p>
+                <p>Teach me facts, ask questions, or paste paragraphs. I'll weave them into a connected knowledge graph. Type <b>/help</b> for commands.</p>
             </div>
             <div class="typing-indicator" id="typing">
                 <span></span><span></span><span></span>
@@ -553,7 +1050,7 @@
             <div class="input-wrapper">
                 <textarea
                     id="input"
-                    placeholder="Teach me something or ask a question..."
+                    placeholder="/help"
                     rows="1"
                 ></textarea>
                 <button class="send-btn" id="sendBtn" onclick="sendMessage()">
@@ -563,13 +1060,20 @@
                     Send
                 </button>
             </div>
-            <div class="quick-commands">
-                <span class="quick-cmd" onclick="quickCmd('help')">help</span>
-                <span class="quick-cmd" onclick="quickCmd('show')">show knowledge</span>
-                <span class="quick-cmd" onclick="quickCmd('activation')">activation</span>
-                <span class="quick-cmd" onclick="quickCmd('weights')">weights</span>
-            </div>
         </div>
+    </div>
+
+    <!-- Info Panel (for show, activation, weights, etc.) -->
+    <div class="info-panel" id="infoPanel">
+        <div class="info-panel-header">
+            <h3 id="infoPanelTitle">Info</h3>
+            <button class="info-panel-close" onclick="closeInfoPanel()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="info-panel-content" id="infoPanelContent"></div>
     </div>
 
     <!-- Clear confirmation dialog -->
@@ -584,17 +1088,151 @@
         </div>
     </div>
 
+    <!-- Neural Visualization Overlay -->
+    <div class="viz-overlay" id="vizOverlay">
+        <div class="viz-container">
+            <div class="viz-header">
+                <div class="viz-title">Neural Knowledge Graph</div>
+                <div class="viz-search">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                    <input type="text" id="vizSearchInput" placeholder="Search neuron..." autocomplete="off">
+                    <div class="viz-search-results" id="vizSearchResults"></div>
+                </div>
+                <div class="viz-header-right">
+                    <button class="viz-close" onclick="closeVisualization()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <path d="M18 6L6 18M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <canvas class="viz-canvas" id="vizCanvas"></canvas>
+            <div class="viz-legend">
+                <div class="viz-legend-item">
+                    <div class="viz-legend-dot neuron"></div>
+                    <span>Neuron (concept)</span>
+                </div>
+                <div class="viz-legend-item">
+                    <div class="viz-legend-dot synapse"></div>
+                    <span>Synapse (connection)</span>
+                </div>
+                <div class="viz-legend-item">
+                    <div class="viz-legend-dot" style="background: #fb923c; box-shadow: 0 0 8px #fb923c;"></div>
+                    <span>Lonely (needs connections)</span>
+                </div>
+                <div class="viz-legend-item">
+                    <div style="width: 20px; height: 2px; border-top: 2px dashed #22c55e;"></div>
+                    <span>Suggested link</span>
+                </div>
+                <div class="viz-legend-item" style="margin-top: 0.75rem; padding-top: 0.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.65rem;">
+                    <span>Pinch/scroll to zoom, double-click to reset</span>
+                </div>
+            </div>
+            <div class="viz-stats" id="vizStats">
+                <div><span class="viz-stats-value" id="vizNeuronCount">0</span> neurons</div>
+                <div><span class="viz-stats-value" id="vizSynapseCount">0</span> synapses</div>
+            </div>
+            <div class="viz-empty" id="vizEmpty" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="3"/>
+                    <circle cx="4" cy="6" r="2"/>
+                    <circle cx="20" cy="6" r="2"/>
+                    <circle cx="4" cy="18" r="2"/>
+                    <circle cx="20" cy="18" r="2"/>
+                    <path d="M9.5 10.5L5.5 7.5M14.5 10.5L18.5 7.5M9.5 13.5L5.5 16.5M14.5 13.5L18.5 16.5"/>
+                </svg>
+                <p>No knowledge yet. Teach me something!</p>
+            </div>
+            <!-- Neuron Detail Popup -->
+            <div class="neuron-popup" id="neuronPopup">
+                <div class="neuron-popup-header">
+                    <span class="neuron-popup-title" id="popupTitle">Neuron</span>
+                    <button class="neuron-popup-close" onclick="closeNeuronPopup()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 6L6 18M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="neuron-popup-body" id="popupContent"></div>
+            </div>
+            <!-- Discovery Status -->
+            <div class="viz-discovery-status" id="discoveryStatus">
+                <div class="discovery-indicator">
+                    <div class="discovery-dot" id="discoveryDot"></div>
+                    <span id="discoveryText">Idle</span>
+                </div>
+                <div class="discovery-count" id="discoveryCount" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const messagesDiv = document.getElementById('messages');
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('sendBtn');
         const typingIndicator = document.getElementById('typing');
         const confirmOverlay = document.getElementById('confirmOverlay');
+        const infoPanel = document.getElementById('infoPanel');
+        const infoPanelTitle = document.getElementById('infoPanelTitle');
+        const infoPanelContent = document.getElementById('infoPanelContent');
+
+        // Command titles for the info panel
+        const commandTitles = {
+            'show': 'Knowledge Graph',
+            'activation': 'Activation State',
+            'weights': 'Hebbian Weights',
+            'stats': 'Statistics',
+            'help': 'Help',
+            'analogies': 'Analogies',
+            'neuron': 'Neuron Details'
+        };
+
+        let lastCommand = '';
+
+        function showInfoPanel(title, content) {
+            infoPanelTitle.textContent = title;
+            infoPanelContent.innerHTML = content;
+            infoPanel.classList.add('active');
+        }
+
+        function closeInfoPanel() {
+            infoPanel.classList.remove('active');
+        }
 
         // Auto-resize textarea
-        input.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        function resizeTextarea() {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        }
+
+        input.addEventListener('input', resizeTextarea);
+
+        // Handle paste event for smooth display
+        input.addEventListener('paste', function(e) {
+            // Prevent default paste
+            e.preventDefault();
+
+            // Get pasted text and normalize it
+            let text = (e.clipboardData || window.clipboardData).getData('text');
+
+            // Normalize: replace multiple spaces/newlines with single space
+            text = text.replace(/\s+/g, ' ').trim();
+
+            // Insert at cursor position
+            const start = this.selectionStart;
+            const end = this.selectionEnd;
+            const before = this.value.substring(0, start);
+            const after = this.value.substring(end);
+            this.value = before + text + after;
+
+            // Move cursor to end of pasted text
+            this.selectionStart = this.selectionEnd = start + text.length;
+
+            // Resize textarea
+            setTimeout(resizeTextarea, 0);
         });
 
         // Enter to send (Shift+Enter for newline)
@@ -604,11 +1242,6 @@
                 sendMessage();
             }
         });
-
-        function quickCmd(cmd) {
-            input.value = cmd;
-            sendMessage();
-        }
 
         function showClearConfirm() {
             confirmOverlay.classList.add('active');
@@ -623,12 +1256,15 @@
             // Clear messages UI only (doesn't erase knowledge)
             const messages = messagesDiv.querySelectorAll('.message');
             messages.forEach(m => m.remove());
+            // Remove any existing welcome message first
+            const existingWelcome = messagesDiv.querySelector('.welcome');
+            if (existingWelcome) existingWelcome.remove();
             // Show welcome again
             const welcome = document.createElement('div');
             welcome.className = 'welcome';
             welcome.innerHTML = `
                 <h2>Welcome to Loom</h2>
-                <p>Teach me facts, ask questions, or paste paragraphs. I'll weave them into a connected knowledge graph. Type <b>help</b> for commands.</p>
+                <p>Teach me facts, ask questions, or paste paragraphs. I'll weave them into a connected knowledge graph. Type <b>/help</b> for commands.</p>
             `;
             messagesDiv.insertBefore(welcome, typingIndicator);
         }
@@ -648,6 +1284,28 @@
         async function sendMessage() {
             const message = input.value.trim();
             if (!message) return;
+
+            // Detect command for panel title (support both /cmd and cmd)
+            let msgLower = message.toLowerCase();
+            // Strip leading slash for command detection
+            const cmdMessage = msgLower.startsWith('/') ? msgLower.slice(1) : msgLower;
+
+            // Handle /clear locally (doesn't need server)
+            if (cmdMessage === 'clear') {
+                input.value = '';
+                input.style.height = 'auto';
+                clearChat();
+                return;
+            }
+
+            if (cmdMessage === 'show') lastCommand = 'show';
+            else if (cmdMessage === 'activation') lastCommand = 'activation';
+            else if (cmdMessage === 'weights') lastCommand = 'weights';
+            else if (cmdMessage === 'stats') lastCommand = 'stats';
+            else if (cmdMessage === 'help') lastCommand = 'help';
+            else if (cmdMessage.startsWith('analogies ')) lastCommand = 'analogies';
+            else if (cmdMessage.startsWith('neuron ')) lastCommand = 'neuron';
+            else lastCommand = '';
 
             // Add user message
             addMessage(message.replace(/</g, '&lt;').replace(/>/g, '&gt;'), 'user');
@@ -671,15 +1329,20 @@
                 typingIndicator.classList.remove('active');
                 sendBtn.disabled = false;
 
-                // Determine message type
-                let msgType = 'assistant';
+                // Show info/help responses in the side panel
                 if (data.type === 'info' || data.type === 'help') {
-                    msgType = 'info';
-                } else if (data.type === 'error') {
+                    const title = commandTitles[lastCommand] || 'Info';
+                    showInfoPanel(title, data.response);
+                    return;
+                }
+
+                // Determine message type for chat
+                let msgType = 'assistant';
+                if (data.type === 'error') {
                     msgType = 'error';
                 }
 
-                // Add response
+                // Add response to chat
                 let content = data.response;
 
                 // Add meta badge for paragraph processing
@@ -703,15 +1366,1025 @@
             }
         });
 
-        // Close dialog on Escape key
+        // Close dialogs on Escape key
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && confirmOverlay.classList.contains('active')) {
-                hideClearConfirm();
+            if (e.key === 'Escape') {
+                if (confirmOverlay.classList.contains('active')) {
+                    hideClearConfirm();
+                }
+                if (infoPanel.classList.contains('active')) {
+                    closeInfoPanel();
+                }
             }
         });
 
         // Focus input on load
         input.focus();
+
+        // ========== Neural Visualization ==========
+        const vizOverlay = document.getElementById('vizOverlay');
+        const vizCanvas = document.getElementById('vizCanvas');
+        const vizEmpty = document.getElementById('vizEmpty');
+        const vizStats = document.getElementById('vizStats');
+        const neuronPopup = document.getElementById('neuronPopup');
+        const popupTitle = document.getElementById('popupTitle');
+        const popupContent = document.getElementById('popupContent');
+        const discoveryDot = document.getElementById('discoveryDot');
+        const discoveryText = document.getElementById('discoveryText');
+        const discoveryCount = document.getElementById('discoveryCount');
+        const ctx = vizCanvas.getContext('2d');
+
+        let nodes = [];
+        let edges = [];
+        let potentialEdges = [];  // Edges being "discovered"
+        let probeParticles = [];  // Particles exploring connections
+        let clusters = [];        // Cluster groupings
+        let transitiveGaps = [];  // Missing transitive links
+        let lonelyNeurons = new Set();  // IDs of lonely neurons
+        let animationId = null;
+        let discoveryInterval = null;
+        let hoveredNode = null;
+        let draggedNode = null;
+        let selectedNode = null;
+        let mouseX = 0, mouseY = 0;
+        let isDiscovering = false;
+
+        // Zoom and pan state
+        let zoom = 1;
+        let panX = 0;
+        let panY = 0;
+        let isPanning = false;
+        let lastPanX = 0, lastPanY = 0;
+        const MIN_ZOOM = 0.3;
+        const MAX_ZOOM = 3;
+
+        async function showVisualization() {
+            vizOverlay.classList.add('active');
+
+            // Fetch graph data
+            try {
+                const response = await fetch('/api/graph');
+                const data = await response.json();
+
+                if (data.nodes.length === 0) {
+                    vizEmpty.style.display = 'flex';
+                    vizStats.style.display = 'none';
+                    return;
+                }
+
+                vizEmpty.style.display = 'none';
+                vizStats.style.display = 'block';
+
+                document.getElementById('vizNeuronCount').textContent = data.nodes.length;
+                document.getElementById('vizSynapseCount').textContent = data.edges.length;
+
+                initGraph(data);
+                startAnimation();
+
+                // Re-center after graph settles (1 second)
+                setTimeout(() => {
+                    centerAndZoomToFit();
+                }, 1000);
+            } catch (error) {
+                console.error('Failed to load graph:', error);
+            }
+        }
+
+        function closeVisualization() {
+            vizOverlay.classList.remove('active');
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            // Clean up
+            closeNeuronPopup();
+            nodes = [];
+            edges = [];
+            potentialEdges = [];
+            probeParticles = [];
+            clusters = [];
+            transitiveGaps = [];
+            lonelyNeurons = new Set();
+            isDiscovering = false;
+            discoveryDot.classList.remove('active');
+            // Reset zoom/pan
+            zoom = 0.3;
+            panX = 0;
+            panY = 0;
+            isPanning = false;
+        }
+
+        function initGraph(data) {
+            // Resize canvas
+            vizCanvas.width = window.innerWidth;
+            vizCanvas.height = window.innerHeight;
+
+            // World coordinates - infinite space, we position nodes in a large area
+            const worldCenterX = 2000;
+            const worldCenterY = 2000;
+
+            // Spread nodes based on count - more nodes = larger spread
+            const spreadFactor = Math.max(500, Math.sqrt(data.nodes.length) * 120);
+            const radiusX = spreadFactor;
+            const radiusY = spreadFactor * 0.8;
+
+            // Track lonely neurons
+            lonelyNeurons = new Set();
+            for (const lonely of (data.lonely_neurons || [])) {
+                lonelyNeurons.add(lonely.id);
+            }
+
+            // Store clusters
+            clusters = data.clusters || [];
+
+            // Store transitive gaps
+            transitiveGaps = data.transitive_gaps || [];
+
+            // Create nodes with positions in an ellipse initially
+            nodes = data.nodes.map((node, i) => {
+                const angle = (i / data.nodes.length) * Math.PI * 2;
+                return {
+                    id: node.id,
+                    label: node.label,
+                    connections: node.connections,
+                    relations: node.relations || {},
+                    isLonely: node.is_lonely || lonelyNeurons.has(node.id),
+                    x: worldCenterX + Math.cos(angle) * radiusX + (Math.random() - 0.5) * 100,
+                    y: worldCenterY + Math.sin(angle) * radiusY + (Math.random() - 0.5) * 100,
+                    vx: 0,
+                    vy: 0,
+                    radius: Math.min(18 + node.connections * 2, 35),
+                    pulsePhase: Math.random() * Math.PI * 2
+                };
+            });
+
+            // After creating nodes, calculate zoom to fit all and center
+            centerAndZoomToFit();
+
+            // Create edges
+            edges = data.edges.map(edge => ({
+                source: nodes.find(n => n.id === edge.source),
+                target: nodes.find(n => n.id === edge.target),
+                relation: edge.relation,
+                weight: edge.weight || 1
+            })).filter(e => e.source && e.target);
+
+            // Create potential edges (being discovered)
+            potentialEdges = (data.potential_edges || []).map(edge => ({
+                source: nodes.find(n => n.id === edge.source),
+                target: nodes.find(n => n.id === edge.target),
+                relation: edge.relation,
+                confidence: edge.confidence || 0.5,
+                progress: 0
+            })).filter(e => e.source && e.target);
+
+            // Initialize probe particles
+            probeParticles = [];
+
+            // Start discovery simulation with all data
+            startDiscovery(data.co_occurrences || [], data.patterns || [], data);
+        }
+
+        function centerAndZoomToFit() {
+            if (nodes.length === 0) return;
+
+            // Find bounding box of all nodes
+            let minX = Infinity, maxX = -Infinity;
+            let minY = Infinity, maxY = -Infinity;
+            for (const node of nodes) {
+                minX = Math.min(minX, node.x);
+                maxX = Math.max(maxX, node.x);
+                minY = Math.min(minY, node.y);
+                maxY = Math.max(maxY, node.y);
+            }
+
+            // Add padding
+            const padding = 150;
+            minX -= padding;
+            maxX += padding;
+            minY -= padding;
+            maxY += padding;
+
+            // Calculate center of nodes
+            const graphCenterX = (minX + maxX) / 2;
+            const graphCenterY = (minY + maxY) / 2;
+
+            // Calculate zoom to fit (with some margin)
+            const graphWidth = maxX - minX;
+            const graphHeight = maxY - minY;
+            const zoomX = vizCanvas.width / graphWidth;
+            const zoomY = vizCanvas.height / graphHeight;
+
+            // Use 30% zoom as default, or fit if graph is too big
+            zoom = Math.min(0.3, Math.min(zoomX, zoomY) * 0.8);
+            zoom = Math.max(MIN_ZOOM, zoom);
+
+            // Center the graph
+            panX = vizCanvas.width / 2 - graphCenterX * zoom;
+            panY = vizCanvas.height / 2 - graphCenterY * zoom;
+        }
+
+        function startAnimation() {
+            const animate = () => {
+                update();
+                render();
+                animationId = requestAnimationFrame(animate);
+            };
+            animate();
+        }
+
+        function startDiscovery(coOccurrences, patterns, data) {
+            // Calculate totals from all discovery data
+            const lonelyCount = (data.lonely_neurons || []).length;
+            const gapCount = (data.transitive_gaps || []).length;
+            const clusterCount = (data.clusters || []).length;
+            const potentialCount = potentialEdges.length;
+            const total = coOccurrences.length + patterns.length + potentialCount + gapCount;
+
+            // Update discovery status
+            if (total > 0 || lonelyCount > 0) {
+                isDiscovering = true;
+                discoveryDot.classList.add('active');
+                discoveryText.textContent = 'Exploring...';
+
+                discoveryCount.style.display = 'block';
+                let statusText = `${total} potential connections`;
+                if (lonelyCount > 0) {
+                    statusText += `\n${lonelyCount} lonely neurons`;
+                }
+                if (gapCount > 0) {
+                    statusText += `\n${gapCount} transitive gaps`;
+                }
+                if (clusterCount > 0) {
+                    statusText += `\n${clusterCount} clusters found`;
+                }
+                discoveryCount.innerHTML = statusText.replace(/\n/g, '<br>');
+            } else {
+                isDiscovering = false;
+                discoveryDot.classList.remove('active');
+                discoveryText.textContent = 'Idle';
+                discoveryCount.style.display = 'none';
+            }
+
+            // Create probe particles for co-occurrences
+            for (const cooc of coOccurrences.slice(0, 5)) {
+                const sourceNode = nodes.find(n => n.id === cooc.entity1);
+                const targetNode = nodes.find(n => n.id === cooc.entity2);
+                if (sourceNode && targetNode) {
+                    spawnProbeParticle(sourceNode, targetNode, cooc.count);
+                }
+            }
+
+            // Create probe particles for transitive gaps
+            for (const gap of transitiveGaps.slice(0, 3)) {
+                const sourceNode = nodes.find(n => n.id === gap.source);
+                const targetNode = nodes.find(n => n.id === gap.target);
+                if (sourceNode && targetNode) {
+                    spawnProbeParticle(sourceNode, targetNode, gap.confidence * 5);
+                }
+            }
+
+            // Create probe particles exploring from lonely neurons
+            const lonelyNodes = nodes.filter(n => n.isLonely);
+            for (const lonely of lonelyNodes.slice(0, 3)) {
+                // Find a random connected node to explore toward
+                const otherNodes = nodes.filter(n => n !== lonely && !n.isLonely);
+                if (otherNodes.length > 0) {
+                    const target = otherNodes[Math.floor(Math.random() * otherNodes.length)];
+                    spawnProbeParticle(lonely, target, 1);
+                }
+            }
+        }
+
+        function spawnProbeParticle(source, target, strength) {
+            probeParticles.push({
+                source,
+                target,
+                progress: 0,
+                speed: 0.005 + Math.random() * 0.01,
+                strength: strength || 1,
+                life: 1.0
+            });
+        }
+
+        function updateProbeParticles() {
+            for (let i = probeParticles.length - 1; i >= 0; i--) {
+                const p = probeParticles[i];
+                p.progress += p.speed;
+
+                if (p.progress >= 1) {
+                    // Reached target, respawn or remove
+                    if (Math.random() < 0.7) {
+                        p.progress = 0;
+                        // Swap direction sometimes
+                        if (Math.random() < 0.3) {
+                            const temp = p.source;
+                            p.source = p.target;
+                            p.target = temp;
+                        }
+                    } else {
+                        probeParticles.splice(i, 1);
+                    }
+                }
+            }
+
+            // Spawn new particles occasionally
+            if (isDiscovering && probeParticles.length < 15 && nodes.length >= 2 && Math.random() < 0.02) {
+                const source = nodes[Math.floor(Math.random() * nodes.length)];
+                const target = nodes[Math.floor(Math.random() * nodes.length)];
+                if (source !== target) {
+                    spawnProbeParticle(source, target, 1);
+                }
+            }
+        }
+
+        function showNeuronPopup(node, x, y) {
+            selectedNode = node;
+            popupTitle.textContent = node.label;
+
+            let html = '';
+
+            // Show relations from node data
+            if (node.relations && Object.keys(node.relations).length > 0) {
+                for (const [relation, targets] of Object.entries(node.relations)) {
+                    html += `<div class="neuron-popup-section">`;
+                    html += `<div class="neuron-popup-label">${relation.replace(/_/g, ' ')}</div>`;
+                    for (const target of targets) {
+                        html += `<div class="neuron-popup-item">
+                            <span class="relation">→</span>
+                            <span class="target">${target.replace(/_/g, ' ')}</span>
+                        </div>`;
+                    }
+                    html += `</div>`;
+                }
+            } else {
+                html = '<div class="neuron-popup-item" style="color: var(--text-muted);">No outgoing connections</div>';
+            }
+
+            popupContent.innerHTML = html;
+
+            // Position popup
+            const popupWidth = 250;
+            const popupHeight = neuronPopup.offsetHeight || 150;
+
+            let popupX = x + 20;
+            let popupY = y - popupHeight / 2;
+
+            // Keep in bounds
+            if (popupX + popupWidth > vizCanvas.width - 20) {
+                popupX = x - popupWidth - 20;
+            }
+            if (popupY < 80) popupY = 80;
+            if (popupY + popupHeight > vizCanvas.height - 20) {
+                popupY = vizCanvas.height - popupHeight - 20;
+            }
+
+            neuronPopup.style.left = popupX + 'px';
+            neuronPopup.style.top = popupY + 'px';
+            neuronPopup.classList.add('active');
+        }
+
+        function closeNeuronPopup() {
+            neuronPopup.classList.remove('active');
+            selectedNode = null;
+        }
+
+        function update() {
+            const damping = 0.9;
+
+            // Forces - no bounds, infinite space
+            const repulsion = 5000;  // Push apart (increased for better spacing)
+            const idealEdgeLength = 180;  // Connected nodes want to be this far apart (increased for readable labels)
+
+            // Calculate graph center for gentle centering force
+            let graphCenterX = 0, graphCenterY = 0;
+            for (const node of nodes) {
+                graphCenterX += node.x;
+                graphCenterY += node.y;
+            }
+            graphCenterX /= nodes.length || 1;
+            graphCenterY /= nodes.length || 1;
+
+            // Apply forces
+            for (let i = 0; i < nodes.length; i++) {
+                const node = nodes[i];
+                if (node === draggedNode) continue;
+
+                // Repulsion from other nodes
+                for (let j = 0; j < nodes.length; j++) {
+                    if (i === j) continue;
+                    const other = nodes[j];
+                    const dx = node.x - other.x;
+                    const dy = node.y - other.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const force = repulsion / (dist * dist);
+                    node.vx += (dx / dist) * force;
+                    node.vy += (dy / dist) * force;
+                }
+
+                // Very gentle pull toward graph center (prevents infinite drift)
+                node.vx += (graphCenterX - node.x) * 0.0001;
+                node.vy += (graphCenterY - node.y) * 0.0001;
+            }
+
+            // Edge attraction - spring force pulls connected nodes together
+            for (const edge of edges) {
+                const dx = edge.target.x - edge.source.x;
+                const dy = edge.target.y - edge.source.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                // Spring force toward ideal length
+                const displacement = dist - idealEdgeLength;
+                const springStrength = 0.05 * (edge.weight || 1);
+                const force = displacement * springStrength;
+
+                if (edge.source !== draggedNode) {
+                    edge.source.vx += (dx / dist) * force;
+                    edge.source.vy += (dy / dist) * force;
+                }
+                if (edge.target !== draggedNode) {
+                    edge.target.vx -= (dx / dist) * force;
+                    edge.target.vy -= (dy / dist) * force;
+                }
+            }
+
+            // Apply velocity with damping - NO BOUNDS (infinite space)
+            for (const node of nodes) {
+                if (node === draggedNode) continue;
+                node.vx *= damping;
+                node.vy *= damping;
+                node.x += node.vx;
+                node.y += node.vy;
+
+                // Update pulse
+                node.pulsePhase += 0.02;
+            }
+
+            // Update potential edges progress
+            for (const edge of potentialEdges) {
+                edge.progress = Math.min(edge.progress + 0.002, edge.confidence);
+            }
+
+            // Update probe particles
+            updateProbeParticles();
+        }
+
+        function render() {
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, vizCanvas.width, vizCanvas.height);
+
+            // Apply zoom and pan transform
+            ctx.save();
+            ctx.translate(panX, panY);
+            ctx.scale(zoom, zoom);
+
+            // Draw cluster backgrounds (group similar entities)
+            for (const cluster of clusters) {
+                const clusterNodes = cluster.members
+                    .map(id => nodes.find(n => n.id === id))
+                    .filter(n => n);
+
+                if (clusterNodes.length >= 2) {
+                    // Calculate cluster center and radius
+                    let cx = 0, cy = 0;
+                    for (const n of clusterNodes) {
+                        cx += n.x;
+                        cy += n.y;
+                    }
+                    cx /= clusterNodes.length;
+                    cy /= clusterNodes.length;
+
+                    // Find max distance from center
+                    let maxDist = 0;
+                    for (const n of clusterNodes) {
+                        const dist = Math.sqrt((n.x - cx) ** 2 + (n.y - cy) ** 2);
+                        maxDist = Math.max(maxDist, dist);
+                    }
+
+                    // Draw cluster circle
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, maxDist + 80, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(99, 102, 241, 0.05)';
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(99, 102, 241, 0.2)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // Draw transitive gap suggestions (dashed yellow lines)
+            for (const gap of transitiveGaps) {
+                const sourceNode = nodes.find(n => n.id === gap.source);
+                const targetNode = nodes.find(n => n.id === gap.target);
+
+                if (sourceNode && targetNode) {
+                    ctx.beginPath();
+                    ctx.setLineDash([3, 6]);
+
+                    const midX = (sourceNode.x + targetNode.x) / 2;
+                    const midY = (sourceNode.y + targetNode.y) / 2;
+                    const offsetX = (sourceNode.y - targetNode.y) * 0.2;
+                    const offsetY = (targetNode.x - sourceNode.x) * 0.2;
+
+                    ctx.moveTo(sourceNode.x, sourceNode.y);
+                    ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, targetNode.x, targetNode.y);
+
+                    ctx.strokeStyle = `rgba(251, 191, 36, ${gap.confidence * 0.6})`;
+                    ctx.lineWidth = 1 + gap.confidence * 2;
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // Draw potential edges (being discovered) - dashed, green
+            // Line thickness based on confidence
+            for (const edge of potentialEdges) {
+                if (edge.progress <= 0) continue;
+
+                ctx.beginPath();
+                ctx.setLineDash([5, 10]);
+
+                const midX = (edge.source.x + edge.target.x) / 2;
+                const midY = (edge.source.y + edge.target.y) / 2;
+                const offsetX = (edge.source.y - edge.target.y) * 0.15;
+                const offsetY = (edge.target.x - edge.source.x) * 0.15;
+
+                ctx.moveTo(edge.source.x, edge.source.y);
+                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
+
+                ctx.strokeStyle = `rgba(34, 197, 94, ${edge.progress * 0.8})`;
+                // Line thickness based on confidence
+                ctx.lineWidth = 1 + (edge.confidence || 0.5) * 3;
+                ctx.shadowColor = '#22c55e';
+                ctx.shadowBlur = edge.progress * 15;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.shadowBlur = 0;
+            }
+
+            // Draw probe particles (exploring connections)
+            for (const p of probeParticles) {
+                const t = p.progress;
+                // Quadratic bezier point calculation
+                const midX = (p.source.x + p.target.x) / 2 + (p.source.y - p.target.y) * 0.2;
+                const midY = (p.source.y + p.target.y) / 2 + (p.target.x - p.source.x) * 0.2;
+
+                const x = (1-t)*(1-t)*p.source.x + 2*(1-t)*t*midX + t*t*p.target.x;
+                const y = (1-t)*(1-t)*p.source.y + 2*(1-t)*t*midY + t*t*p.target.y;
+
+                // Draw trail
+                const trailLength = 8;
+                for (let i = 0; i < trailLength; i++) {
+                    const tt = Math.max(0, t - i * 0.02);
+                    const tx = (1-tt)*(1-tt)*p.source.x + 2*(1-tt)*tt*midX + tt*tt*p.target.x;
+                    const ty = (1-tt)*(1-tt)*p.source.y + 2*(1-tt)*tt*midY + tt*tt*p.target.y;
+
+                    ctx.beginPath();
+                    ctx.arc(tx, ty, 3 - i * 0.3, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(34, 197, 94, ${(1 - i/trailLength) * 0.6})`;
+                    ctx.fill();
+                }
+
+                // Draw particle head
+                ctx.beginPath();
+                ctx.arc(x, y, 5, 0, Math.PI * 2);
+                const gradient = ctx.createRadialGradient(x, y, 0, x, y, 5);
+                gradient.addColorStop(0, '#4ade80');
+                gradient.addColorStop(1, '#22c55e');
+                ctx.fillStyle = gradient;
+                ctx.shadowColor = '#22c55e';
+                ctx.shadowBlur = 10;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            // Draw edges (synapses) - clean, visible lines
+            // First pass: draw non-highlighted edges
+            for (const edge of edges) {
+                const isHighlighted = (hoveredNode && (edge.source === hoveredNode || edge.target === hoveredNode)) ||
+                                     (selectedNode && (edge.source === selectedNode || edge.target === selectedNode));
+
+                if (isHighlighted) continue;  // Skip highlighted edges in first pass
+
+                ctx.beginPath();
+                ctx.moveTo(edge.source.x, edge.source.y);
+
+                // Slight curve for organic look
+                const midX = (edge.source.x + edge.target.x) / 2;
+                const midY = (edge.source.y + edge.target.y) / 2;
+                const offsetX = (edge.source.y - edge.target.y) * 0.08;
+                const offsetY = (edge.target.x - edge.source.x) * 0.08;
+
+                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
+
+                ctx.strokeStyle = `rgba(140, 160, 200, ${0.4 + edge.weight * 0.15})`;
+                ctx.lineWidth = 1.5 + edge.weight * 0.5;
+                ctx.stroke();
+            }
+
+            // Second pass: draw highlighted edges ON TOP with glow effect
+            for (const edge of edges) {
+                const isHighlighted = (hoveredNode && (edge.source === hoveredNode || edge.target === hoveredNode)) ||
+                                     (selectedNode && (edge.source === selectedNode || edge.target === selectedNode));
+
+                if (!isHighlighted) continue;  // Only draw highlighted edges in second pass
+
+                const midX = (edge.source.x + edge.target.x) / 2;
+                const midY = (edge.source.y + edge.target.y) / 2;
+                const offsetX = (edge.source.y - edge.target.y) * 0.08;
+                const offsetY = (edge.target.x - edge.source.x) * 0.08;
+
+                // Draw outer glow (subtle)
+                ctx.beginPath();
+                ctx.moveTo(edge.source.x, edge.source.y);
+                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
+                ctx.strokeStyle = 'rgba(168, 85, 247, 0.25)';
+                ctx.lineWidth = 6 + edge.weight;
+                ctx.stroke();
+
+                // Draw bright core line
+                ctx.beginPath();
+                ctx.moveTo(edge.source.x, edge.source.y);
+                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
+                ctx.strokeStyle = '#c084fc';  // Bright purple
+                ctx.lineWidth = 2 + edge.weight * 0.3;
+                ctx.stroke();
+            }
+
+            // Draw nodes (neurons) - clean style
+            for (const node of nodes) {
+                const isHovered = node === hoveredNode;
+                const isSelected = node === selectedNode;
+                const isLonely = node.isLonely;
+                const pulse = Math.sin(node.pulsePhase) * 0.08 + 1;
+                const r = node.radius * (isHovered || isSelected ? 1.15 : pulse);
+
+                // Simple outer glow for hovered/selected
+                if (isHovered || isSelected) {
+                    const glowGradient = ctx.createRadialGradient(node.x, node.y, r, node.x, node.y, r * 1.8);
+                    glowGradient.addColorStop(0, isSelected ? 'rgba(34, 197, 94, 0.4)' : 'rgba(99, 102, 241, 0.3)');
+                    glowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    ctx.fillStyle = glowGradient;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, r * 1.8, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Node body with gradient
+                const bodyGradient = ctx.createRadialGradient(node.x - r * 0.3, node.y - r * 0.3, 0, node.x, node.y, r);
+                if (isSelected) {
+                    bodyGradient.addColorStop(0, '#4ade80');
+                    bodyGradient.addColorStop(1, '#22c55e');
+                } else if (isLonely) {
+                    bodyGradient.addColorStop(0, isHovered ? '#fdba74' : '#fb923c');
+                    bodyGradient.addColorStop(1, isHovered ? '#f97316' : '#ea580c');
+                } else {
+                    bodyGradient.addColorStop(0, isHovered ? '#818cf8' : '#6366f1');
+                    bodyGradient.addColorStop(1, isHovered ? '#6366f1' : '#4f46e5');
+                }
+                ctx.fillStyle = bodyGradient;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Highlight ring
+                if (isHovered || isSelected) {
+                    ctx.strokeStyle = isSelected ? '#86efac' : (isLonely ? '#fed7aa' : '#a5b4fc');
+                    ctx.lineWidth = isSelected ? 3 : 2;
+                    ctx.stroke();
+                }
+
+                // Pulsing ring for lonely neurons to attract attention
+                if (isLonely && !isSelected) {
+                    const pulseAlpha = (Math.sin(node.pulsePhase * 2) + 1) * 0.15;
+                    ctx.strokeStyle = `rgba(251, 146, 60, ${pulseAlpha})`;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, r + 5 + Math.sin(node.pulsePhase) * 3, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+
+                // Label
+                ctx.fillStyle = '#fff';
+                ctx.font = `${isHovered ? 'bold ' : ''}${Math.min(12, r * 0.7)}px Inter, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                const label = node.label.length > 12 ? node.label.slice(0, 10) + '...' : node.label;
+                ctx.fillText(label, node.x, node.y);
+
+                // Connection count badge
+                if (node.connections > 1) {
+                    const badgeX = node.x + r * 0.7;
+                    const badgeY = node.y - r * 0.7;
+                    ctx.fillStyle = '#a855f7';
+                    ctx.beginPath();
+                    ctx.arc(badgeX, badgeY, 10, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 9px Inter, sans-serif';
+                    ctx.fillText(node.connections, badgeX, badgeY);
+                }
+            }
+
+            // Draw hovered node info
+            if (hoveredNode) {
+                const infoX = hoveredNode.x;
+                const infoY = hoveredNode.y + hoveredNode.radius + 25;
+
+                ctx.fillStyle = 'rgba(26, 26, 26, 0.95)';
+                ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(infoX - 60, infoY - 10, 120, 24, 6);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#a1a1aa';
+                ctx.font = '11px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${hoveredNode.connections} connections`, infoX, infoY + 3);
+            }
+
+            // Restore transform
+            ctx.restore();
+
+            // Draw zoom indicator (in screen space, not world space)
+            if (zoom !== 1) {
+                ctx.fillStyle = 'rgba(26, 26, 26, 0.9)';
+                ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(vizCanvas.width / 2 - 40, vizCanvas.height - 50, 80, 30, 8);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#a1a1aa';
+                ctx.font = '12px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`${Math.round(zoom * 100)}%`, vizCanvas.width / 2, vizCanvas.height - 35);
+            }
+        }
+
+        // Convert screen coordinates to world coordinates (accounting for zoom/pan)
+        function screenToWorld(screenX, screenY) {
+            return {
+                x: (screenX - panX) / zoom,
+                y: (screenY - panY) / zoom
+            };
+        }
+
+        // Mouse interactions
+        vizCanvas.addEventListener('mousemove', (e) => {
+            const rect = vizCanvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
+
+            // Handle panning (left-click drag on empty space)
+            if (isPanning) {
+                panX += e.clientX - lastPanX;
+                panY += e.clientY - lastPanY;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+                vizCanvas.style.cursor = 'grabbing';
+                return;
+            }
+
+            // Convert to world coordinates
+            const world = screenToWorld(screenX, screenY);
+            mouseX = world.x;
+            mouseY = world.y;
+
+            if (draggedNode) {
+                draggedNode.x = mouseX;
+                draggedNode.y = mouseY;
+                return;
+            }
+
+            // Check hover (using world coordinates)
+            hoveredNode = null;
+            for (const node of nodes) {
+                const dx = mouseX - node.x;
+                const dy = mouseY - node.y;
+                if (dx * dx + dy * dy < node.radius * node.radius) {
+                    hoveredNode = node;
+                    vizCanvas.style.cursor = 'pointer';
+                    break;
+                }
+            }
+            if (!hoveredNode && !isPanning) {
+                vizCanvas.style.cursor = 'grab';  // Show grab cursor on empty space
+            }
+        });
+
+        vizCanvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) {  // Left click
+                if (hoveredNode) {
+                    draggedNode = hoveredNode;
+                    vizCanvas.style.cursor = 'grabbing';
+                } else {
+                    // Left-click on empty space = start panning
+                    isPanning = true;
+                    lastPanX = e.clientX;
+                    lastPanY = e.clientY;
+                    vizCanvas.style.cursor = 'grabbing';
+                    closeNeuronPopup();
+                }
+            }
+        });
+
+        vizCanvas.addEventListener('mouseup', (e) => {
+            if (e.button === 0) {  // Left click release
+                if (draggedNode && hoveredNode === draggedNode) {
+                    // It was a click (not a drag), show popup
+                    const rect = vizCanvas.getBoundingClientRect();
+                    const clickX = e.clientX - rect.left;
+                    const clickY = e.clientY - rect.top;
+                    showNeuronPopup(draggedNode, clickX, clickY);
+                }
+                draggedNode = null;
+                isPanning = false;
+                vizCanvas.style.cursor = hoveredNode ? 'pointer' : 'grab';
+            }
+        });
+
+        vizCanvas.addEventListener('click', (e) => {
+            // Also handle direct click (for when there's no drag)
+            if (hoveredNode && !draggedNode) {
+                const rect = vizCanvas.getBoundingClientRect();
+                showNeuronPopup(hoveredNode, e.clientX - rect.left, e.clientY - rect.top);
+            }
+        });
+
+        // Double-click to reset zoom (center and fit all nodes)
+        vizCanvas.addEventListener('dblclick', (e) => {
+            if (!hoveredNode) {
+                centerAndZoomToFit();
+            }
+        });
+
+        vizCanvas.addEventListener('mouseleave', () => {
+            hoveredNode = null;
+            draggedNode = null;
+            isPanning = false;
+        });
+
+        // Trackpad zoom (pinch-to-zoom fires as wheel events with ctrlKey)
+        vizCanvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+
+            const rect = vizCanvas.getBoundingClientRect();
+            const mouseXRaw = e.clientX - rect.left;
+            const mouseYRaw = e.clientY - rect.top;
+
+            // Get world coordinates before zoom
+            const worldX = (mouseXRaw - panX) / zoom;
+            const worldY = (mouseYRaw - panY) / zoom;
+
+            // Pinch-to-zoom (ctrlKey is set for trackpad pinch)
+            // Also handle regular scroll wheel zoom
+            const zoomFactor = e.ctrlKey ? 0.02 : 0.001;
+            const delta = -e.deltaY * zoomFactor;
+            const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * (1 + delta)));
+
+            // Adjust pan to zoom toward mouse position
+            panX = mouseXRaw - worldX * newZoom;
+            panY = mouseYRaw - worldY * newZoom;
+
+            zoom = newZoom;
+        }, { passive: false });
+
+        // Middle-click or two-finger pan on trackpad
+        vizCanvas.addEventListener('mousedown', (e) => {
+            if (e.button === 1) { // Middle mouse button
+                isPanning = true;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+                e.preventDefault();
+            }
+        });
+
+        // Handle pan movement
+        const originalMouseMove = vizCanvas.onmousemove;
+        vizCanvas.addEventListener('mousemove', (e) => {
+            if (isPanning) {
+                panX += e.clientX - lastPanX;
+                panY += e.clientY - lastPanY;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+            }
+        });
+
+        vizCanvas.addEventListener('mouseup', (e) => {
+            if (e.button === 1) {
+                isPanning = false;
+            }
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (vizOverlay.classList.contains('active')) {
+                vizCanvas.width = window.innerWidth;
+                vizCanvas.height = window.innerHeight;
+            }
+        });
+
+        // Close visualization on Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && vizOverlay.classList.contains('active')) {
+                closeVisualization();
+            }
+        });
+
+        // Quick command helper
+        function quickCmd(cmd) {
+            input.value = '/' + cmd;
+            sendMessage();
+        }
+
+        // ========== Visualization Search ==========
+        const vizSearchInput = document.getElementById('vizSearchInput');
+        const vizSearchResults = document.getElementById('vizSearchResults');
+
+        vizSearchInput.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase().trim();
+
+            if (!query || nodes.length === 0) {
+                vizSearchResults.classList.remove('active');
+                return;
+            }
+
+            // Filter nodes matching query
+            const matches = nodes.filter(n =>
+                n.label.toLowerCase().includes(query) ||
+                n.id.toLowerCase().includes(query)
+            ).slice(0, 8);  // Limit to 8 results
+
+            if (matches.length === 0) {
+                vizSearchResults.innerHTML = '<div class="viz-search-result" style="color: var(--text-muted);">No matches</div>';
+            } else {
+                vizSearchResults.innerHTML = matches.map(node => `
+                    <div class="viz-search-result" data-node-id="${node.id}">
+                        <span>${node.label}</span>
+                        <span class="count">${node.connections} conn</span>
+                    </div>
+                `).join('');
+            }
+            vizSearchResults.classList.add('active');
+        });
+
+        vizSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const firstResult = vizSearchResults.querySelector('.viz-search-result[data-node-id]');
+                if (firstResult) {
+                    firstResult.click();
+                }
+            } else if (e.key === 'Escape') {
+                vizSearchInput.value = '';
+                vizSearchResults.classList.remove('active');
+                vizSearchInput.blur();
+            }
+        });
+
+        vizSearchResults.addEventListener('click', (e) => {
+            const result = e.target.closest('.viz-search-result[data-node-id]');
+            if (result) {
+                const nodeId = result.dataset.nodeId;
+                const node = nodes.find(n => n.id === nodeId);
+                if (node) {
+                    // Center view on the node
+                    panX = vizCanvas.width / 2 - node.x * zoom;
+                    panY = vizCanvas.height / 2 - node.y * zoom;
+
+                    // Select and show popup
+                    selectedNode = node;
+                    hoveredNode = node;
+
+                    // Show popup in center of screen
+                    showNeuronPopup(node, vizCanvas.width / 2 + 50, vizCanvas.height / 2);
+                }
+                vizSearchResults.classList.remove('active');
+                vizSearchInput.value = '';
+            }
+        });
+
+        // Close search results when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.viz-search')) {
+                vizSearchResults.classList.remove('active');
+            }
+        });
+
+        // Clear search when visualization closes
+        const originalCloseViz = closeVisualization;
+        closeVisualization = function() {
+            vizSearchInput.value = '';
+            vizSearchResults.classList.remove('active');
+            originalCloseViz();
+        };
     </script>
 </body>
 </html>

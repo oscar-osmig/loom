@@ -10,6 +10,10 @@ from .constants import COLORS, RELATION_PATTERNS
 
 def _check_relation_patterns(parser, t: str) -> str | None:
     """Handle all relation patterns (has, can, lives_in, etc.)."""
+    # Skip questions - they should be handled by query handlers
+    if parser._is_question(t):
+        return None
+
     for phrase, relation, reverse in RELATION_PATTERNS:
         if phrase in t:
             # Skip if this is part of a relative clause "that [verb]"
@@ -89,15 +93,49 @@ def _check_relation_patterns(parser, t: str) -> str | None:
                     # Truncate to just the first part
                     obj = obj[:compound_match.start()].strip()
 
+                # Truncate object at sentence boundaries (periods followed by space or end)
+                # This prevents "live in water. they breathe" from capturing everything
+                if ". " in obj:
+                    obj = obj.split(". ")[0].strip()
+                # Also truncate at period at end
+                if obj.endswith("."):
+                    obj = obj[:-1].strip()
+
                 # Truncate object at discourse markers
                 for marker in [", and ", ", but ", ", so ", ", because ", ", which ", ", that ", ", when "]:
                     if marker in obj:
                         obj = obj.split(marker)[0].strip()
 
-                # Truncate at prepositions that add extra info
-                for prep in [" from ", " to ", " for ", " with ", " on ", " at "]:
+                # Truncate at prepositions and location markers
+                for prep in [" from ", " to ", " for ", " with ", " on ", " at ",
+                             " in ", " along ", " across ", " through ", " over ",
+                             " under ", " between ", " around ", " during "]:
                     if prep in obj:
+                        # Don't truncate "to" in these patterns:
+                        if prep == " to ":
+                            preserve_patterns = [
+                                " up to ", " immune to ", " related to ",
+                                "going to ", "trying to ", "wanting to ",
+                                "able to ", "used to ", "need to ", "have to ",
+                                "going to the ", "going to a ",
+                            ]
+                            if any(p in obj or obj.startswith(p.strip()) for p in preserve_patterns):
+                                continue
+                        # Don't truncate "in" for "live in" patterns (already handled by relation)
+                        if prep == " in " and obj.startswith("in "):
+                            continue
                         obj = obj.split(prep)[0].strip()
+
+                # Clean leading quantifiers/determiners: "one of the X" -> "X"
+                quantifier_patterns = [
+                    "one of the most ", "one of the ", "some of the ",
+                    "many of the ", "most of the ", "all of the ",
+                    "part of the ", "members of the ",
+                ]
+                for qp in quantifier_patterns:
+                    if obj.startswith(qp):
+                        obj = obj[len(qp):]
+                        break
 
                 # Clean trailing "too" or similar
                 for suffix in [" too", " as well", " also", " very"]:
@@ -153,21 +191,38 @@ def _check_becomes_pattern(parser, t: str) -> str | None:
 
 def _check_is_statement(parser, t: str) -> str | None:
     """Handle 'X is/are Y' statements, including 'X and Y are Z'."""
-    verb = None
-    if " is " in t:
-        verb = " is "
-    elif " are " in t:
+    # Skip questions - they should be handled by query handlers
+    if parser._is_question(t):
+        return None
+
+    # Find the FIRST occurrence of "is" or "are" to split on
+    is_pos = t.find(" is ")
+    are_pos = t.find(" are ")
+
+    if is_pos == -1 and are_pos == -1:
+        return None
+
+    # Use whichever comes first (or the one that exists)
+    if is_pos == -1:
         verb = " are "
+        split_pos = are_pos
+    elif are_pos == -1:
+        verb = " is "
+        split_pos = is_pos
+    else:
+        # Both exist - use the one that comes first
+        if is_pos < are_pos:
+            verb = " is "
+            split_pos = is_pos
+        else:
+            verb = " are "
+            split_pos = are_pos
 
-    if not verb:
+    subj = t[:split_pos].strip()
+    obj = t[split_pos + len(verb):].strip()
+
+    if not subj or not obj:
         return None
-
-    parts = t.split(verb, 1)
-    if len(parts) != 2:
-        return None
-
-    subj = parts[0].strip()
-    obj = parts[1].strip()
 
     # Handle quantifiers: "some X are Y" -> X can_be Y
     quantifier = None
@@ -203,10 +258,19 @@ def _check_is_statement(parser, t: str) -> str | None:
         # Remove the relative clause from obj
         obj = obj[:rel_match.start()].strip()
 
+    # Check for "that are food for X" pattern (special case)
+    if not relative_clause_facts:
+        food_for_rel_match = re.search(r"\s+that\s+(?:is|are)\s+food\s+for\s+(.+)$", obj, re.IGNORECASE)
+        if food_for_rel_match:
+            food_target = food_for_rel_match.group(1).strip()
+            relative_clause_facts.append(("food_for", food_target, False))
+            # Remove the relative clause from obj
+            obj = obj[:food_for_rel_match.start()].strip()
+
     # Check for "that [verb] [in/on/...] X" patterns (location, possession, etc.)
     if not relative_clause_facts:
-        # Match: "that live in X", "that eat X", "that have X", etc.
-        rel_verb_match = re.search(r"\s+that\s+(live|lives|eat|eats|have|has|use|uses|need|needs|like|likes|want|wants)\s+(?:in\s+)?(.+)$", obj, re.IGNORECASE)
+        # Match: "that live in X", "that eat X", "that have X", "that make X", etc.
+        rel_verb_match = re.search(r"\s+that\s+(live|lives|eat|eats|have|has|use|uses|need|needs|like|likes|want|wants|make|makes)\s+(?:in\s+)?(.+)$", obj, re.IGNORECASE)
         if rel_verb_match:
             verb_rel = rel_verb_match.group(1).lower()
             rel_obj = rel_verb_match.group(2).strip()
@@ -219,6 +283,7 @@ def _check_is_statement(parser, t: str) -> str | None:
                 "need": "needs", "needs": "needs",
                 "like": "likes", "likes": "likes",
                 "want": "wants", "wants": "wants",
+                "make": "makes", "makes": "makes",
             }
             if verb_rel in verb_map:
                 relative_clause_facts.append((verb_map[verb_rel], rel_obj, False))
@@ -245,7 +310,7 @@ def _check_is_statement(parser, t: str) -> str | None:
             "require": "requires", "requires": "requires",
             "are": "is", "is": "is",
             "do": "can", "does": "can",
-            "make": "causes", "makes": "causes",
+            "make": "makes", "makes": "makes",
             "get": "has", "gets": "has",
             "become": "becomes", "becomes": "becomes",
         }
@@ -281,6 +346,12 @@ def _check_is_statement(parser, t: str) -> str | None:
         with_possession = with_obj
         obj = obj[:with_match.start()].strip()
 
+    # Truncate object at sentence boundaries (periods)
+    if ". " in obj:
+        obj = obj.split(". ")[0].strip()
+    if obj.endswith("."):
+        obj = obj[:-1].strip()
+
     # Truncate object at discourse markers (but, because, so, etc.)
     for marker in [", but ", " but ", ", because ", " because ", ", so ", " so ",
                    ", and ", ", while ", " while ", ", when ", " when ",
@@ -288,10 +359,34 @@ def _check_is_statement(parser, t: str) -> str | None:
         if marker in obj:
             obj = obj.split(marker)[0].strip()
 
+    # Handle special "food for X" pattern BEFORE truncation
+    food_for_target = None
+    food_for_match = re.search(r"^food\s+for\s+(.+)$", obj, re.IGNORECASE)
+    if food_for_match:
+        food_for_target = food_for_match.group(1).strip()
+        obj = "food"  # Keep just "food" as the category
+
+    # Handle "threatened by X" pattern BEFORE truncation
+    threatened_by = None
+    threatened_match = re.search(r"^threatened\s+by\s+(.+)$", obj, re.IGNORECASE)
+    if threatened_match:
+        threatened_by = threatened_match.group(1).strip()
+        obj = ""  # No category, just the property
+
+    # Handle "home to X" pattern - extract as property, not category
+    home_to = None
+    home_match = re.search(r"^home\s+to\s+(.+)$", obj, re.IGNORECASE)
+    if home_match:
+        home_to = home_match.group(1).strip()
+        obj = ""  # No category
+
     # Also truncate at certain words that indicate extra info
-    for word in [" than ", " like ", " unlike ", " from ", " to ", " for "]:
-        if word in obj:
-            obj = obj.split(word)[0].strip()
+    # But NOT for special patterns handled above
+    if not food_for_target and not threatened_by and not home_to:
+        for word in [" than ", " like ", " unlike ", " from ", " at ", " in ", " on ",
+                     " where ", " when ", " beyond ", " through ", " around ", " over "]:
+            if word in obj:
+                obj = obj.split(word)[0].strip()
 
     # Handle compound subjects: "X and Y are Z" -> add facts for both X and Y
     subjects = [subj]
@@ -329,6 +424,9 @@ def _check_is_statement(parser, t: str) -> str | None:
             # Add category fact (the noun part) - only if we have actual nouns
             if main_category:
                 parser.loom.add_fact(s, "is", main_category)
+                # Also add reverse relation for instance lookups
+                # "dogs are mammals" -> mammals has_instance dogs
+                parser.loom.add_fact(main_category, "has_instance", s)
 
             # Add property facts for each adjective
             for adj in adjectives:
@@ -351,6 +449,24 @@ def _check_is_statement(parser, t: str) -> str | None:
         # Handle "with X" possession: "mammals with long trunks" -> has: long_trunks
         if with_possession:
             parser.loom.add_fact(s, "has", with_possession)
+
+        # Handle "food for X" pattern: "plankton are food for whales" -> food_for: whales
+        if food_for_target:
+            parser.loom.add_fact(s, "food_for", food_for_target)
+
+        # Handle "threatened by X" pattern: "coral reefs are threatened by pollution"
+        if threatened_by:
+            parser.loom.add_fact(s, "has_property", "threatened")
+            # Handle compound threats: "pollution and climate change"
+            if " and " in threatened_by:
+                for threat in threatened_by.split(" and "):
+                    parser.loom.add_fact(s, "threatened_by", threat.strip())
+            else:
+                parser.loom.add_fact(s, "threatened_by", threatened_by)
+
+        # Handle "home to X" pattern: "coral reefs are home to thousands of species"
+        if home_to:
+            parser.loom.add_fact(s, "home_to", home_to)
 
     # Track last subject for pronoun resolution
     parser.last_subject = subjects[-1] if subjects else subj

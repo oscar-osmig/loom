@@ -3,19 +3,37 @@ MongoDB storage backend for Loom.
 Provides efficient persistent storage for the knowledge graph.
 
 Collections:
-- facts: Stores all knowledge triples (subject, relation, object)
+- facts: Stores knowledge quads (subject, relation, object, context) with properties
 - procedures: Stores procedural sequences
 - inferences: Stores cached inferences
 - metadata: Stores system metadata (name, version, etc.)
+
+Supports Quad + Properties schema:
+- subject, relation, object, context (the quad)
+- properties: {confidence, temporal, scope, conditions, source_type, ...}
 
 Install pymongo: pip install pymongo
 """
 
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Default context for facts without explicit context
+DEFAULT_CONTEXT = "general"
+
+# Default properties template
+DEFAULT_PROPERTIES = {
+    "confidence": "high",
+    "temporal": "always",      # always, sometimes, past, future
+    "scope": "universal",      # universal, typical, specific
+    "conditions": [],
+    "source_type": "user",
+    "created_at": None,
+}
 
 # Try to import pymongo
 PYMONGO_AVAILABLE = False
@@ -120,19 +138,51 @@ class MongoStorage:
     # ==================== FACTS ====================
 
     def add_fact(self, subject: str, relation: str, obj: str,
-                 confidence: str = "high", constraints: list = None) -> bool:
+                 confidence: str = "high", constraints: list = None,
+                 provenance: dict = None, context: str = None,
+                 properties: dict = None) -> bool:
         """
-        Add a fact to the knowledge graph.
+        Add a fact to the knowledge graph with Quad + Properties schema.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            confidence: Confidence level (legacy, moved to properties)
+            constraints: Optional constraints (legacy, moved to properties.conditions)
+            provenance: Provenance metadata (legacy, merged into properties)
+            context: Context for the fact (general, domestic, scientific, etc.)
+            properties: Full properties dict with temporal, scope, etc.
 
         Returns True if fact was added, False if it already exists.
         """
+        ctx = context or DEFAULT_CONTEXT
+
+        # Build properties from new format or legacy parameters
+        props = dict(DEFAULT_PROPERTIES)
+        props["created_at"] = datetime.utcnow().isoformat()
+
+        if properties:
+            # New format - use provided properties
+            props.update(properties)
+        else:
+            # Legacy format - convert to properties
+            props["confidence"] = confidence
+            props["conditions"] = constraints or []
+            if provenance:
+                props["source_type"] = provenance.get("source_type", "user")
+                props["premises"] = provenance.get("premises", [])
+                props["rule_id"] = provenance.get("rule_id")
+                props["speaker_id"] = provenance.get("speaker_id")
+                props["derivation_id"] = provenance.get("derivation_id")
+
         doc = {
             "instance": self.instance_name,
             "subject": subject,
             "relation": relation,
             "object": obj,
-            "confidence": confidence,
-            "constraints": constraints or []
+            "context": ctx,
+            "properties": props
         }
 
         try:
@@ -141,24 +191,122 @@ class MongoStorage:
         except DuplicateKeyError:
             return False
 
-    def get_facts(self, subject: str, relation: str) -> list:
-        """Get all objects for a subject-relation pair."""
+    def _normalize_fact(self, fact: dict) -> dict:
+        """Normalize a fact to Quad + Properties format (for backward compat)."""
+        if "context" not in fact:
+            fact["context"] = DEFAULT_CONTEXT
+        if "properties" not in fact:
+            # Convert legacy format
+            fact["properties"] = {
+                "confidence": fact.get("confidence", "high"),
+                "temporal": "always",
+                "scope": "universal",
+                "conditions": fact.get("constraints", []),
+                "source_type": fact.get("provenance", {}).get("source_type", "user"),
+                "created_at": fact.get("provenance", {}).get("created_at"),
+                "premises": fact.get("provenance", {}).get("premises", []),
+            }
+        return fact
+
+    def get_facts(self, subject: str, relation: str, context: str = None) -> list:
+        """Get all objects for a subject-relation pair, optionally filtered by context."""
+        query = {
+            "instance": self.instance_name,
+            "subject": subject,
+            "relation": relation
+        }
+        if context:
+            query["context"] = context
+
+        cursor = self.db.facts.find(query, {"object": 1, "_id": 0})
+        return [doc["object"] for doc in cursor]
+
+    def get_facts_with_context(self, subject: str, relation: str) -> list:
+        """Get facts with their context and properties."""
         cursor = self.db.facts.find({
             "instance": self.instance_name,
             "subject": subject,
             "relation": relation
-        }, {"object": 1, "_id": 0})
+        })
 
-        return [doc["object"] for doc in cursor]
+        results = []
+        for doc in cursor:
+            doc = self._normalize_fact(doc)
+            results.append({
+                "object": doc["object"],
+                "context": doc.get("context", DEFAULT_CONTEXT),
+                "properties": doc.get("properties", {})
+            })
+        return results
 
-    def get_fact_with_metadata(self, subject: str, relation: str, obj: str) -> Optional[dict]:
+    def get_fact_with_metadata(self, subject: str, relation: str, obj: str,
+                                context: str = None) -> Optional[dict]:
         """Get a specific fact with all its metadata."""
-        return self.db.facts.find_one({
+        query = {
             "instance": self.instance_name,
             "subject": subject,
             "relation": relation,
             "object": obj
+        }
+        if context:
+            query["context"] = context
+
+        doc = self.db.facts.find_one(query)
+        if doc:
+            return self._normalize_fact(doc)
+        return None
+
+    def get_facts_by_source_type(self, source_type: str) -> List[dict]:
+        """Get all facts with a specific source type."""
+        # Query both new and legacy formats
+        cursor = self.db.facts.find({
+            "instance": self.instance_name,
+            "$or": [
+                {"properties.source_type": source_type},
+                {"provenance.source_type": source_type}
+            ]
         })
+        return [self._normalize_fact(doc) for doc in cursor]
+
+    def get_facts_depending_on(self, subject: str, relation: str, obj: str) -> List[dict]:
+        """
+        Get all facts that depend on the given fact as a premise.
+        Used for truth maintenance - when a fact is retracted,
+        its dependents may need to be invalidated.
+        """
+        # Query both new and legacy formats
+        cursor = self.db.facts.find({
+            "instance": self.instance_name,
+            "$or": [
+                {"properties.premises": {
+                    "$elemMatch": {
+                        "subject": subject,
+                        "relation": relation,
+                        "object": obj
+                    }
+                }},
+                {"provenance.premises": {
+                    "$elemMatch": {
+                        "subject": subject,
+                        "relation": relation,
+                        "object": obj
+                    }
+                }}
+            ]
+        })
+        return [self._normalize_fact(doc) for doc in cursor]
+
+    def get_inferred_facts(self) -> List[dict]:
+        """Get all facts that were inferred (not directly stated by user)."""
+        # Query both new and legacy formats
+        cursor = self.db.facts.find({
+            "instance": self.instance_name,
+            "$or": [
+                {"properties.source_type": {"$in": ["inference", "inheritance"]}},
+                {"provenance.source_type": {"$in": ["inference", "inheritance"]}}
+            ]
+        })
+        return [self._normalize_fact(doc) for doc in cursor]
 
     def get_all_facts_for_subject(self, subject: str) -> dict:
         """Get all facts for a subject, grouped by relation."""
@@ -173,6 +321,24 @@ class MongoStorage:
 
         return dict(result)
 
+    def remove_entity(self, entity: str) -> int:
+        """
+        Remove all facts where entity is the SUBJECT only.
+        Does NOT remove facts where entity is the object (to preserve valid relations).
+        Used for cleaning up junk neurons.
+
+        Returns:
+            Number of facts removed
+        """
+        # Only remove facts where entity is the subject
+        # Keep facts where entity is the object (these are valid relations from other entities)
+        result = self.db.facts.delete_many({
+            "instance": self.instance_name,
+            "subject": entity
+        })
+
+        return result.deleted_count
+
     def get_subjects_with_relation(self, relation: str, obj: str) -> list:
         """Find all subjects that have a relation to an object (reverse lookup)."""
         cursor = self.db.facts.find({
@@ -183,18 +349,54 @@ class MongoStorage:
 
         return [doc["subject"] for doc in cursor]
 
-    def retract_fact(self, subject: str, relation: str, obj: str) -> bool:
-        """Remove a fact from the knowledge graph."""
-        result = self.db.facts.delete_one({
+    def retract_fact(self, subject: str, relation: str, obj: str,
+                     cascade: bool = False) -> dict:
+        """
+        Remove a fact from the knowledge graph.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            cascade: If True, also retract all facts that depend on this fact
+
+        Returns:
+            dict with 'retracted' (bool) and 'cascade_count' (int) keys
+        """
+        result = {"retracted": False, "cascade_count": 0, "cascaded_facts": []}
+
+        # First, find dependents if cascade is enabled
+        if cascade:
+            dependents = self.get_facts_depending_on(subject, relation, obj)
+            for dep in dependents:
+                # Recursively retract dependent facts
+                sub_result = self.retract_fact(
+                    dep["subject"], dep["relation"], dep["object"],
+                    cascade=True
+                )
+                if sub_result["retracted"]:
+                    result["cascade_count"] += 1 + sub_result["cascade_count"]
+                    result["cascaded_facts"].append({
+                        "subject": dep["subject"],
+                        "relation": dep["relation"],
+                        "object": dep["object"]
+                    })
+                    result["cascaded_facts"].extend(sub_result["cascaded_facts"])
+
+        # Now delete the actual fact
+        delete_result = self.db.facts.delete_one({
             "instance": self.instance_name,
             "subject": subject,
             "relation": relation,
             "object": obj
         })
-        return result.deleted_count > 0
+        result["retracted"] = delete_result.deleted_count > 0
+
+        return result
 
     def update_confidence(self, subject: str, relation: str, obj: str, confidence: str):
         """Update confidence level for a fact."""
+        # Update both new and legacy formats for compatibility
         self.db.facts.update_one(
             {
                 "instance": self.instance_name,
@@ -202,11 +404,15 @@ class MongoStorage:
                 "relation": relation,
                 "object": obj
             },
-            {"$set": {"confidence": confidence}}
+            {"$set": {
+                "properties.confidence": confidence,
+                "confidence": confidence  # Legacy field
+            }}
         )
 
     def add_constraint(self, subject: str, relation: str, obj: str, constraint: str):
         """Add a constraint to a fact."""
+        # Update both new and legacy formats for compatibility
         self.db.facts.update_one(
             {
                 "instance": self.instance_name,
@@ -214,7 +420,10 @@ class MongoStorage:
                 "relation": relation,
                 "object": obj
             },
-            {"$addToSet": {"constraints": constraint}}
+            {"$addToSet": {
+                "properties.conditions": constraint,
+                "constraints": constraint  # Legacy field
+            }}
         )
 
     def get_constraints(self, subject: str, relation: str, obj: str) -> list:
@@ -224,9 +433,15 @@ class MongoStorage:
             "subject": subject,
             "relation": relation,
             "object": obj
-        }, {"constraints": 1})
+        }, {"constraints": 1, "properties.conditions": 1})
 
-        return doc.get("constraints", []) if doc else []
+        if not doc:
+            return []
+        # Check new format first, then legacy
+        conditions = doc.get("properties", {}).get("conditions", [])
+        if conditions:
+            return conditions
+        return doc.get("constraints", [])
 
     def get_confidence(self, subject: str, relation: str, obj: str) -> str:
         """Get confidence level for a fact."""
@@ -235,9 +450,15 @@ class MongoStorage:
             "subject": subject,
             "relation": relation,
             "object": obj
-        }, {"confidence": 1})
+        }, {"confidence": 1, "properties.confidence": 1})
 
-        return doc.get("confidence", "medium") if doc else "medium"
+        if not doc:
+            return "medium"
+        # Check new format first, then legacy
+        conf = doc.get("properties", {}).get("confidence")
+        if conf:
+            return conf
+        return doc.get("confidence", "medium")
 
     # ==================== KNOWLEDGE GRAPH ====================
 
