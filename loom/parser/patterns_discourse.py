@@ -343,73 +343,56 @@ def _check_discourse_patterns(parser, t: str) -> str | None:
 def _learn_from_conversation(parser, t: str) -> str | None:
     """
     Fallback: Try to extract any knowledge from natural conversation.
-    Uses flexible pattern matching to learn from how people naturally talk.
-    Based on Hebbian learning: concepts mentioned together form connections.
+    Uses generic SVO extraction — no hardcoded verb lists.
+    Any verb becomes a valid relation.
     """
+    from ..svo import extract_svo
+    from .relations import get_relation_for_verb
+
     # NEVER store questions as facts
     if parser._is_question(t):
         return None
 
-    # Try to find any subject-verb-object pattern
     words = t.split()
     if len(words) < 3:
         return None
 
-    # Common conversational verbs to look for
-    verbs = [
-        "is", "are", "was", "were", "has", "have", "had",
-        "likes", "like", "wants", "want", "needs", "need",
-        "eats", "eat", "lives", "live", "uses", "use",
-        "makes", "make", "does", "do", "can", "will",
-        "loves", "love", "hates", "hate", "knows", "know"
-    ]
+    # Try SVO extraction
+    svo = extract_svo(t)
+    if not svo:
+        return None
 
-    for i, word in enumerate(words):
-        if word in verbs and i > 0:
-            subj = " ".join(words[:i])
-            obj = " ".join(words[i+1:])
+    subj = svo["subject"]
+    obj = svo["object"]
+    relation = svo["relation"]
 
-            if subj and obj:
-                # Map verb to relation
-                relation = word
-                if word in ["is", "are", "was", "were"]:
-                    relation = "is"
-                elif word in ["has", "have", "had"]:
-                    relation = "has"
-                elif word in ["likes", "like"]:
-                    relation = "likes"
-                elif word in ["wants", "want"]:
-                    relation = "wants"
-                elif word in ["needs", "need"]:
-                    relation = "needs"
-                elif word in ["eats", "eat"]:
-                    relation = "eats"
-                elif word in ["lives", "live"]:
-                    relation = "lives_in"
-                elif word in ["uses", "use"]:
-                    relation = "uses"
-                elif word in ["makes", "make"]:
-                    relation = "makes"
-                elif word in ["loves", "love"]:
-                    relation = "loves"
-                elif word in ["hates", "hate"]:
-                    relation = "hates"
-                elif word in ["knows", "know"]:
-                    relation = "knows"
+    # Clean up subject
+    for prefix in ["the ", "a ", "an ", "i think ", "i know ", "did you know "]:
+        if subj.lower().startswith(prefix):
+            subj = subj[len(prefix):]
+    for suffix in [" also", " too", " as well"]:
+        if subj.lower().endswith(suffix):
+            subj = subj[:-len(suffix)].strip()
 
-                # Clean up subject - remove discourse markers and articles
-                for prefix in ["the ", "a ", "an ", "i think ", "i know ", "did you know "]:
-                    if subj.lower().startswith(prefix):
-                        subj = subj[len(prefix):]
-                for suffix in [" also", " too", " as well"]:
-                    if subj.lower().endswith(suffix):
-                        subj = subj[:-len(suffix)].strip()
+    # Clean up object
+    if obj.endswith("."):
+        obj = obj[:-1].strip()
 
-                if subj and obj:
-                    parser.loom.add_fact(subj, relation, obj)
-                    return f"Interesting, I'll remember that about {subj}."
+    if not subj or not obj:
+        return None
 
-    return None
+    # Use known relation name if we have one, otherwise use the verb as-is
+    rel_def = get_relation_for_verb(svo["verb"])
+    if rel_def:
+        relation = rel_def.relation
+
+    parser.loom.add_fact(subj, relation, obj)
+
+    # Track subject
+    parser.last_subject = subj
+    parser.loom.context.update(subject=subj, relation=relation, obj=obj)
+
+    return f"Interesting, I'll remember that about {subj}."
 
 
 def _check_first_person_statement(parser, t: str) -> str | None:

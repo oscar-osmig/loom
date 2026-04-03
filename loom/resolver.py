@@ -278,12 +278,20 @@ def _resolve_partial_match(phrase: str, knowledge: dict) -> Optional[str]:
     Resolve through partial string matching.
 
     If looking for "eyes" and "blue_eyes" exists, return "blue_eyes".
-    Only matches if phrase is a significant part of existing neuron.
+    Only matches if phrase is a significant part of existing neuron
+    and the prefix is a non-meaningful modifier (adjective, article).
     """
     phrase_norm = normalize(phrase)
 
     if len(phrase_norm) < 3:
         return None  # Too short for partial matching
+
+    # Prefixes that are safe to merge through (modifiers, not identifiers)
+    SAFE_PREFIXES = {
+        "big", "small", "large", "tiny", "old", "new", "young",
+        "red", "blue", "green", "yellow", "black", "white", "golden",
+        "male", "female", "baby", "adult", "wild", "domestic",
+    }
 
     # Look for neurons that end with this phrase
     candidates = []
@@ -292,7 +300,17 @@ def _resolve_partial_match(phrase: str, knowledge: dict) -> Optional[str]:
 
         # Must be a suffix match (not just contains)
         if entity_lower.endswith(phrase_norm) or entity_lower.endswith("_" + phrase_norm):
-            # Prefer shorter matches (more specific)
+            # Check what the prefix is — only merge if it's a safe modifier
+            if entity_lower.endswith("_" + phrase_norm):
+                prefix = entity_lower[:-(len(phrase_norm) + 1)]
+            else:
+                prefix = entity_lower[:-len(phrase_norm)]
+
+            # Skip if prefix is a meaningful word (title, role, etc.)
+            # Only allow merge for short adjective-like prefixes
+            if prefix and prefix not in SAFE_PREFIXES:
+                continue
+
             candidates.append((entity, len(entity)))
 
     if candidates:
