@@ -440,32 +440,52 @@ def _check_part_of_query(parser, t: str) -> str | None:
 
 
 def _check_what_does_query(parser, t: str) -> str | None:
-    """Handle 'what does X verb?' queries for many common verbs."""
-    from .relations import PRESENT_VERB_MAP, get_relation_for_verb
+    """Handle 'what does X verb?' queries — works with ANY verb, not just known ones."""
+    from .relations import get_relation_for_verb
 
-    # Build regex from all known base verbs
-    verbs = "|".join(PRESENT_VERB_MAP.keys())
-    match = re.match(rf"what do(?:es)?\s+(.+?)\s+({verbs})", t)
-    if match:
-        subj, verb = match.groups()
+    # Match "what does/do X verb [preposition]?" with any verb
+    match = re.match(r"what do(?:es)?\s+(.+?)\s+(\w+)(?:\s+(\w+))?\s*\??$", t)
+    if not match:
+        return None
 
-        # Look up relation from unified definitions
-        rel_def = get_relation_for_verb(verb)
-        relation = rel_def.relation if rel_def else verb
+    subj = match.group(1).strip()
+    verb = match.group(2).strip()
+    prep = match.group(3)  # Optional preposition (e.g., "live in")
 
-        things = parser.loom.get(subj, relation)
+    # Skip if verb is "do" (handled by _check_what_do_generic_query)
+    if verb == "do":
+        return None
 
+    # Build the relation to look up
+    rel_def = get_relation_for_verb(verb)
+    if rel_def:
+        relation = rel_def.relation
+    else:
+        # Use the verb directly — matches how SVO stores it
+        # Also try with -s suffix (third person: "exports")
+        relation = verb
+
+    # Try the relation as-is, then with -s (third person form)
+    things = parser.loom.get(subj, relation)
+    if not things and not relation.endswith("s"):
+        things = parser.loom.get(subj, relation + "s")
         if things:
-            verb_form = verb if is_plural(subj) else verb + "s"
-            # Replace underscores with spaces for display
-            display = [x.replace("_", " ") for x in things]
-            return f"{subj.title()} {verb_form} {format_list(display)}."
-        else:
-            parser.loom.add_fact(subj, "has_open_question", relation)
-            verb_form = verb if is_plural(subj) else verb + "s"
-            return f"I don't know what {subj} {verb_form} yet."
+            relation = relation + "s"
 
-    return None
+    # Also try with preposition attached (e.g., "flow" + "through" -> "flows_through")
+    if not things and prep:
+        things = parser.loom.get(subj, f"{relation}_{prep}")
+        if not things:
+            things = parser.loom.get(subj, f"{relation}s_{prep}")
+
+    if things:
+        verb_form = verb if is_plural(subj) else verb + "s"
+        display = [x.replace("_", " ") for x in things]
+        return f"{subj.title()} {verb_form} {format_list(display)}."
+    else:
+        parser.loom.add_fact(subj, "has_open_question", relation)
+        verb_form = verb if is_plural(subj) else verb + "s"
+        return f"I don't know what {subj} {verb_form} yet."
 
 
 def _check_what_do_generic_query(parser, t: str) -> str | None:
