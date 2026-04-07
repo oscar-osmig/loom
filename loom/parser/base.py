@@ -384,6 +384,7 @@ class Parser:
             self._check_contrast_pattern,        # "X are A, while Y are B" - early!
             self._check_name_query,
             self._check_self_identity_query,     # "what are you?" - self-identity query
+            self._check_generic_query,           # Generic SVO-based query engine (handles most questions)
             self._check_negation,
             self._check_color_query,
             self._check_where_lay_eggs_query,    # "where do X lay eggs?" - BEFORE where_query!
@@ -745,6 +746,13 @@ class Parser:
         return _parse_subject_predicates(self, text)
 
     # Other patterns (from patterns.py)
+    def _check_generic_query(self, t: str) -> str | None:
+        """Generic SVO-based query handler — replaces specialized query functions."""
+        if not self._is_question(t):
+            return None
+        from ..query_engine import handle_query
+        return handle_query(self, t)
+
     def _check_negation(self, t: str) -> str | None:
         from .patterns import _check_negation
         return _check_negation(self, t)

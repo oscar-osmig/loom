@@ -145,6 +145,8 @@ def _find_owner_property(owner: str, property_hint: str, knowledge: dict) -> Opt
     owner_norm = normalize(owner)
     hint_norm = normalize(property_hint)
     hint_words = set(hint_norm.replace("_", " ").split())
+    # Count meaningful words in the hint (length > 2)
+    hint_meaningful = [w for w in hint_norm.replace("_", " ").split() if len(w) > 2]
 
     # Check if owner exists
     if owner_norm not in knowledge:
@@ -171,29 +173,31 @@ def _find_owner_property(owner: str, property_hint: str, knowledge: dict) -> Opt
         for prop in owner_relations[relation]:
             prop_lower = prop.lower()
             prop_words = set(prop_lower.replace("_", " ").split())
+            prop_meaningful = [w for w in prop_lower.replace("_", " ").split() if len(w) > 2]
 
-            # Check various matching strategies:
+            # Only merge when the hint is a REFERENCE to the existing property,
+            # not when the hint is MORE SPECIFIC than the stored property.
+            # "blue_eyes" stored, user says "eyes" -> merge (hint is less specific)
+            # "festival" stored, user says "festival of tides" -> DON'T merge (hint is more specific)
 
-            # 1. Property contains the hint word
+            # Strategy: only merge when the hint has FEWER or EQUAL meaningful words than the prop
+            if len(hint_meaningful) > len(prop_meaningful):
+                continue  # Hint is more specific — don't merge
+
+            # 1. Property contains the hint word (hint is a subset reference)
             # "blue_eyes" contains "eyes"
-            if hint_norm in prop_lower:
+            if hint_norm in prop_lower and len(hint_meaningful) <= len(prop_meaningful):
                 return prop
 
-            # 2. Hint contains the property
-            # "eyes" in "blue_eyes"
-            if prop_lower in hint_norm:
+            # 2. Hint == property (exact match via words)
+            if hint_words == prop_words:
                 return prop
 
-            # 3. Word overlap (at least one significant word matches)
-            # "eyes" matches with "blue_eyes" because "eyes" is in both
-            common_words = hint_words & prop_words
-            if common_words and len(common_words) > 0:
-                # Make sure we're matching meaningful words (not just "the", "a", etc.)
-                meaningful = [w for w in common_words if len(w) > 2]
-                if meaningful:
-                    return prop
+            # 3. All hint words are in prop (hint is less specific)
+            if hint_words.issubset(prop_words) and len(hint_meaningful) > 0:
+                return prop
 
-            # 4. Property ends with hint (common pattern)
+            # 4. Property ends with hint (common pattern for suffixes)
             # "blue_eyes" ends with "eyes"
             if prop_lower.endswith(hint_norm) or prop_lower.endswith("_" + hint_norm):
                 return prop
@@ -204,17 +208,18 @@ def _find_owner_property(owner: str, property_hint: str, knowledge: dict) -> Opt
             if owner_norm in relations["belongs_to"]:
                 entity_lower = entity.lower()
                 entity_words = set(entity_lower.replace("_", " ").split())
+                entity_meaningful = [w for w in entity_lower.replace("_", " ").split() if len(w) > 2]
 
-                # Same matching strategies
-                if hint_norm in entity_lower:
+                # Same specificity rule
+                if len(hint_meaningful) > len(entity_meaningful):
+                    continue
+
+                if hint_norm in entity_lower and len(hint_meaningful) <= len(entity_meaningful):
                     return entity
-                if entity_lower in hint_norm:
+                if hint_words == entity_words:
                     return entity
-                common_words = hint_words & entity_words
-                if common_words:
-                    meaningful = [w for w in common_words if len(w) > 2]
-                    if meaningful:
-                        return entity
+                if hint_words.issubset(entity_words) and len(hint_meaningful) > 0:
+                    return entity
 
     return None
 
@@ -278,12 +283,20 @@ def _resolve_partial_match(phrase: str, knowledge: dict) -> Optional[str]:
     Resolve through partial string matching.
 
     If looking for "eyes" and "blue_eyes" exists, return "blue_eyes".
-    Only matches if phrase is a significant part of existing neuron.
+    Only matches if phrase is a significant part of existing neuron
+    and the prefix is a non-meaningful modifier (adjective, article).
     """
     phrase_norm = normalize(phrase)
 
     if len(phrase_norm) < 3:
         return None  # Too short for partial matching
+
+    # Prefixes that are safe to merge through (modifiers, not identifiers)
+    SAFE_PREFIXES = {
+        "big", "small", "large", "tiny", "old", "new", "young",
+        "red", "blue", "green", "yellow", "black", "white", "golden",
+        "male", "female", "baby", "adult", "wild", "domestic",
+    }
 
     # Look for neurons that end with this phrase
     candidates = []
@@ -292,7 +305,17 @@ def _resolve_partial_match(phrase: str, knowledge: dict) -> Optional[str]:
 
         # Must be a suffix match (not just contains)
         if entity_lower.endswith(phrase_norm) or entity_lower.endswith("_" + phrase_norm):
-            # Prefer shorter matches (more specific)
+            # Check what the prefix is — only merge if it's a safe modifier
+            if entity_lower.endswith("_" + phrase_norm):
+                prefix = entity_lower[:-(len(phrase_norm) + 1)]
+            else:
+                prefix = entity_lower[:-len(phrase_norm)]
+
+            # Skip if prefix is a meaningful word (title, role, etc.)
+            # Only allow merge for short adjective-like prefixes
+            if prefix and prefix not in SAFE_PREFIXES:
+                continue
+
             candidates.append((entity, len(entity)))
 
     if candidates:

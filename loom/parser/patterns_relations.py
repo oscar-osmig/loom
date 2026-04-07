@@ -1,159 +1,154 @@
 """
 Relation pattern methods for the Parser class.
 Handles relation patterns, conditional, becomes, and is_statement.
+
+Uses generic SVO (Subject-Verb-Object) extraction instead of hardcoded
+verb lists. Any verb becomes a valid relation — no predefined mapping needed.
 """
 
 import re
 from ..grammar import is_plural, is_adjective
-from .constants import COLORS, RELATION_PATTERNS
+from ..svo import extract_svo, extract_multiple_svo
+from .constants import COLORS
+from .relations import get_relation_for_verb
+
+
+def _clean_subject(subj: str) -> str:
+    """Clean up a subject string."""
+    for prefix in ["the ", "a ", "an "]:
+        if subj.lower().startswith(prefix):
+            subj = subj[len(prefix):]
+    for suffix in [" also", " too", " as well"]:
+        if subj.lower().endswith(suffix):
+            subj = subj[:-len(suffix)].strip()
+    return subj.strip()
+
+
+def _clean_object(obj: str) -> str:
+    """Clean up an object string."""
+    # Strip discourse markers from start
+    for prefix in ["also ", "too ", "as well ", "even "]:
+        if obj.lower().startswith(prefix):
+            obj = obj[len(prefix):].strip()
+
+    # Truncate at sentence boundaries
+    if ". " in obj:
+        obj = obj.split(". ")[0].strip()
+    if obj.endswith("."):
+        obj = obj[:-1].strip()
+
+    # Truncate at discourse markers
+    for marker in [", and ", ", but ", ", so ", ", because ", ", which ", ", that ", ", when "]:
+        if marker in obj:
+            obj = obj.split(marker)[0].strip()
+
+    # Truncate at prepositional phrases that add context but aren't core
+    for prep in [" for ", " with ", " about ", " during ", " since ",
+                 " after ", " before ", " until ", " near ", " between "]:
+        if prep in obj:
+            obj = obj.split(prep)[0].strip()
+
+    # Clean trailing filler
+    for suffix in [" too", " as well", " also", " very"]:
+        if obj.endswith(suffix):
+            obj = obj[:-len(suffix)].strip()
+
+    return obj.strip()
 
 
 def _check_relation_patterns(parser, t: str) -> str | None:
-    """Handle all relation patterns (has, can, lives_in, etc.)."""
-    # Skip questions - they should be handled by query handlers
+    """
+    Handle relation patterns using generic SVO extraction.
+
+    Instead of matching against a hardcoded list of verbs, we detect
+    the verb structurally and use it directly as the relation.
+    """
+    # Skip questions
     if parser._is_question(t):
         return None
 
-    for phrase, relation, reverse in RELATION_PATTERNS:
-        if phrase in t:
-            # Skip if this is part of a relative clause "that [verb]"
-            # e.g., "birds that can fly" or "dolphins that live in the ocean"
-            # should be handled by _check_is_statement
-            if " that" + phrase in t:
-                continue
+    # Skip if contains copula — those are handled by _check_is_statement
+    # But NOT "was/were + past participle" which is passive voice (SVO handles that)
+    from ..svo import IRREGULAR_PAST
+    if " is " in t or " are " in t:
+        return None
+    # For was/were, only skip if it's NOT followed by a past participle (i.e., it's copula)
+    for copula in [" was ", " were "]:
+        if copula in t:
+            pos = t.find(copula)
+            after = t[pos + len(copula):].split()[0] if t[pos + len(copula):].split() else ""
+            # If followed by past participle (-ed or irregular), let SVO handle it
+            is_participle = (after.endswith("ed") and len(after) > 3) or after in IRREGULAR_PAST
+            if is_participle:
+                break  # Don't skip — SVO will extract the passive
+            else:
+                return None  # Copula — let _check_is_statement handle it
 
-            parts = t.split(phrase, 1)
-            if len(parts) == 2:
-                subj = parts[0].strip()
-                obj = parts[1].strip()
+    # Handle modal verbs: "X can/could/will Y" → store as (X, can, Y)
+    # These are auxiliaries that Loom uses as relations, not content verbs.
+    import re as _re
+    modal_match = _re.match(r"^(.+?)\s+(can|could|cannot|can't|will|would|should|must)\s+(.+)$", t)
+    if modal_match:
+        subj = _clean_subject(modal_match.group(1))
+        modal = modal_match.group(2)
+        obj = _clean_object(modal_match.group(3))
+        if subj and obj:
+            relation = "cannot" if modal in ("cannot", "can't") else "can"
+            parser.loom.add_fact(subj, relation, obj)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation=relation, obj=obj)
+            return f"Got it, {subj} {modal} {obj}."
 
-                # Skip if subject contains "is/are" - this is an "is/are" statement
-                # e.g., "dolphins are mammals that live in the ocean" should be
-                # handled by _check_is_statement, not split on "live in"
-                if " is " in subj or " are " in subj:
-                    continue
+    # Try SVO extraction (handles both active and passive voice)
+    svos = extract_multiple_svo(t)
+    if not svos:
+        return None
 
-                # Skip if subject contains another relation verb that should match first
-                # e.g., "penguins live in cold regions and can swim" should match "live in" first
-                relation_verbs = [" live in ", " lives in ", " have ", " has ", " eat ", " eats ",
-                                  " drink ", " drinks ", " need ", " needs ", " use ", " uses "]
-                skip = False
-                for verb in relation_verbs:
-                    if verb in subj and verb != phrase:
-                        skip = True
-                        break
-                if skip:
-                    continue
+    stored_any = False
+    first_subj = None
 
-                # Clean up subject
-                for prefix in ["the ", "a ", "an "]:
-                    if subj.startswith(prefix):
-                        subj = subj[len(prefix):]
-                for suffix in [" also", " too", " as well"]:
-                    if subj.endswith(suffix):
-                        subj = subj[:-len(suffix)].strip()
+    for svo in svos:
+        subj = _clean_subject(svo["subject"])
+        obj = _clean_object(svo["object"])
+        relation = svo["relation"]
 
-                # Clean up object - strip discourse markers
-                for prefix in ["also ", "too ", "as well ", "even "]:
-                    if obj.startswith(prefix):
-                        obj = obj[len(prefix):].strip()
+        if not subj or not obj:
+            continue
 
-                # Handle "X can Y, and Z can Y too" pattern
-                # e.g., "eagles can fly very high, and sparrows can fly too"
-                and_match = re.search(r",?\s+and\s+(\w+)\s+can\s+(.+?)(?:\s+too)?$", obj)
-                if and_match and relation == "can":
-                    second_subj = and_match.group(1).strip()
-                    second_action = and_match.group(2).strip()
-                    # Clean the action
-                    for suffix in [" too", " as well", " also"]:
-                        if second_action.endswith(suffix):
-                            second_action = second_action[:-len(suffix)].strip()
-                    parser.loom.add_fact(second_subj, "can", second_action)
-                    # Truncate original object
-                    obj = obj[:and_match.start()].strip()
+        # Check if we have a known relation with a reverse mapping
+        rel_def = get_relation_for_verb(svo["verb"])
+        if rel_def:
+            relation = rel_def.relation
+            reverse = rel_def.reverse
+        else:
+            # Use the verb directly as the relation — this is the key change
+            reverse = None
 
-                # Handle compound predicates: "X and can/eat/live Y" -> split into two facts
-                # e.g., "sharp teeth and can swim fast" -> has: sharp teeth, can: swim fast
-                compound_match = re.search(r"\s+and\s+(can|could|eat|eats|live|lives|need|needs|have|has|drink|drinks|use|uses)\s+(.+)$", obj, re.IGNORECASE)
-                if compound_match:
-                    second_verb = compound_match.group(1).lower()
-                    second_obj = compound_match.group(2).strip()
-                    # Map verb to relation
-                    verb_map = {
-                        "can": "can", "could": "can",
-                        "eat": "eats", "eats": "eats",
-                        "live": "lives_in", "lives": "lives_in",
-                        "need": "needs", "needs": "needs",
-                        "have": "has", "has": "has",
-                        "drink": "drinks", "drinks": "drinks",
-                        "use": "uses", "uses": "uses",
-                    }
-                    if second_verb in verb_map:
-                        parser.loom.add_fact(subj, verb_map[second_verb], second_obj)
-                    # Truncate to just the first part
-                    obj = obj[:compound_match.start()].strip()
+        parser.loom.add_fact(subj, relation, obj)
 
-                # Truncate object at sentence boundaries (periods followed by space or end)
-                # This prevents "live in water. they breathe" from capturing everything
-                if ". " in obj:
-                    obj = obj.split(". ")[0].strip()
-                # Also truncate at period at end
-                if obj.endswith("."):
-                    obj = obj[:-1].strip()
+        # Add reverse relation if defined
+        if reverse:
+            parser.loom.add_fact(obj, reverse, subj)
 
-                # Truncate object at discourse markers
-                for marker in [", and ", ", but ", ", so ", ", because ", ", which ", ", that ", ", when "]:
-                    if marker in obj:
-                        obj = obj.split(marker)[0].strip()
+        # For passive voice with context (e.g., "founded in 1432 by X")
+        # store the temporal/location context as additional fact
+        if svo.get("context"):
+            context = _clean_object(svo["context"])
+            if context:
+                parser.loom.add_fact(obj, relation + "_context", context)
 
-                # Truncate at prepositions and location markers
-                for prep in [" from ", " to ", " for ", " with ", " on ", " at ",
-                             " in ", " along ", " across ", " through ", " over ",
-                             " under ", " between ", " around ", " during "]:
-                    if prep in obj:
-                        # Don't truncate "to" in these patterns:
-                        if prep == " to ":
-                            preserve_patterns = [
-                                " up to ", " immune to ", " related to ",
-                                "going to ", "trying to ", "wanting to ",
-                                "able to ", "used to ", "need to ", "have to ",
-                                "going to the ", "going to a ",
-                            ]
-                            if any(p in obj or obj.startswith(p.strip()) for p in preserve_patterns):
-                                continue
-                        # Don't truncate "in" for "live in" patterns (already handled by relation)
-                        if prep == " in " and obj.startswith("in "):
-                            continue
-                        obj = obj.split(prep)[0].strip()
+        if not first_subj:
+            first_subj = subj
+        stored_any = True
 
-                # Clean leading quantifiers/determiners: "one of the X" -> "X"
-                quantifier_patterns = [
-                    "one of the most ", "one of the ", "some of the ",
-                    "many of the ", "most of the ", "all of the ",
-                    "part of the ", "members of the ",
-                ]
-                for qp in quantifier_patterns:
-                    if obj.startswith(qp):
-                        obj = obj[len(qp):]
-                        break
+    if stored_any:
+        # Track subject for pronoun resolution
+        parser.last_subject = first_subj
+        parser.loom.context.update(subject=first_subj, relation=svos[0]["relation"], obj=svos[0]["object"])
 
-                # Clean trailing "too" or similar
-                for suffix in [" too", " as well", " also", " very"]:
-                    if obj.endswith(suffix):
-                        obj = obj[:-len(suffix)].strip()
-
-                parser.loom.add_fact(subj, relation, obj)
-
-                # Add reverse relation if defined
-                if reverse:
-                    parser.loom.add_fact(obj, reverse, subj)
-
-                # Track subject for pronoun resolution
-                parser.last_subject = subj
-                parser.loom.context.update(subject=subj, relation=relation, obj=obj)
-
-                # Natural response
-                return f"Got it, {subj} {phrase.strip()} {obj}."
+        verb_display = svos[0]["verb"]
+        obj_display = _clean_object(svos[0]["object"])
+        return f"Got it, {first_subj} {verb_display} {obj_display}."
 
     return None
 
@@ -190,39 +185,57 @@ def _check_becomes_pattern(parser, t: str) -> str | None:
 
 
 def _check_is_statement(parser, t: str) -> str | None:
-    """Handle 'X is/are Y' statements, including 'X and Y are Z'."""
+    """Handle 'X is/are/was/were Y' statements, including 'X and Y are Z'."""
+    from ..svo import IRREGULAR_PAST
+
     # Skip questions - they should be handled by query handlers
     if parser._is_question(t):
         return None
 
-    # Find the FIRST occurrence of "is" or "are" to split on
-    is_pos = t.find(" is ")
-    are_pos = t.find(" are ")
+    # Find the FIRST occurrence of any copula to split on
+    copulas = [" is ", " are ", " was ", " were "]
+    best_pos = -1
+    verb = None
 
-    if is_pos == -1 and are_pos == -1:
+    for cop in copulas:
+        pos = t.find(cop)
+        if pos != -1 and (best_pos == -1 or pos < best_pos):
+            best_pos = pos
+            verb = cop
+
+    if best_pos == -1:
         return None
 
-    # Use whichever comes first (or the one that exists)
-    if is_pos == -1:
-        verb = " are "
-        split_pos = are_pos
-    elif are_pos == -1:
-        verb = " is "
-        split_pos = is_pos
-    else:
-        # Both exist - use the one that comes first
-        if is_pos < are_pos:
-            verb = " is "
-            split_pos = is_pos
-        else:
-            verb = " are "
-            split_pos = are_pos
+    split_pos = best_pos
 
     subj = t[:split_pos].strip()
     obj = t[split_pos + len(verb):].strip()
 
     if not subj or not obj:
         return None
+
+    # Skip passive voice: "X was/were [past_participle] [by Y]"
+    # These should be handled by SVO extraction in _check_relation_patterns
+    if verb in (" was ", " were "):
+        first_word = obj.split()[0] if obj.split() else ""
+        is_passive = (
+            (first_word.endswith("ed") and len(first_word) > 3)
+            or first_word in IRREGULAR_PAST
+        )
+        if is_passive:
+            return None  # Let _check_relation_patterns handle passive voice
+
+    # Handle "X is made from/of Y" → store as made_of relation
+    if verb == " is " and obj.startswith(("made from ", "made of ", "made out of ")):
+        for prefix in ["made out of ", "made from ", "made of "]:
+            if obj.startswith(prefix):
+                material = obj[len(prefix):].strip().rstrip(".")
+                if material:
+                    parser.loom.add_fact(subj, "made_of", material)
+                    parser.last_subject = subj
+                    parser.loom.context.update(subject=subj, relation="made_of", obj=material)
+                    return f"Got it, {subj} is {prefix}{material}."
+                break
 
     # Handle quantifiers: "some X are Y" -> X can_be Y
     quantifier = None

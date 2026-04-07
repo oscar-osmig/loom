@@ -504,10 +504,62 @@ def _check_what_query(parser, t: str) -> str | None:
     parser.last_subject = subj
     parser.loom.context.update(subject=subj)
 
+    from ..normalizer import normalize as _normalize
+
+    # Try the subject as-is, then with leading article stripped, then with a
+    # leading adjective stripped — but ONLY if the normalized form changes.
+    # This prevents stripping "the climate of" (since "climate of valdoria"
+    # normalizes to "climate_valdoria", which IS different from "valdoria").
+    def try_with_fallback(relation):
+        """Try to get facts, with progressive subject stripping."""
+        result = parser.loom.get(subj, relation)
+        if result:
+            return result, subj
+
+        subj_norm = _normalize(subj)
+        words = subj.split()
+        tried_norms = {subj_norm}
+
+        # Strip leading "the"/"a"/"an"
+        if words and words[0] in ("the", "a", "an"):
+            candidate = " ".join(words[1:])
+            candidate_norm = _normalize(candidate)
+            if candidate_norm not in tried_norms:
+                result = parser.loom.get(candidate, relation)
+                if result:
+                    return result, candidate
+                tried_norms.add(candidate_norm)
+            words = words[1:]
+
+        # Strip ONE leading adjective/modifier, but only if:
+        # 1. The candidate still has multiple words
+        # 2. The normalized form is different AND still multi-segment
+        #    (so we don't collapse to a single known entity)
+        if len(words) >= 3:
+            candidate = " ".join(words[1:])
+            candidate_norm = _normalize(candidate)
+            # Must still be a multi-segment key (contain "_") to be safe
+            if "_" in candidate_norm and candidate_norm not in tried_norms:
+                result = parser.loom.get(candidate, relation)
+                if result:
+                    return result, candidate
+
+        return None, subj
+
     # FIRST: Check for "is" relations (what category is this?)
     # e.g., "what are cats?" -> cats are mammals
     # This takes priority because users usually ask "what are X?" to learn ABOUT X
-    facts = parser.loom.get(subj, "is")
+    facts, subj = try_with_fallback("is")
+
+    # Also check has_instance (reverse of is): "what is the dish of X?" -> find what has_instance
+    # e.g., dish_valdoria --has_instance--> spiced_fish means spiced_fish IS the dish of valdoria
+    # Only use this for multi-word "X of Y" patterns where the direct lookup failed.
+    if not facts and "of" in subj.split():
+        instances, subj_matched = try_with_fallback("has_instance")
+        if instances:
+            verb = "are" if is_plural(subj_matched) else "is"
+            instance_display = [i.replace("_", " ") for i in instances]
+            return f"{format_list([d.title() for d in instance_display])} {verb} the {subj_matched}."
     if facts:
         # Build a rich response including all categories
         verb = "are" if is_plural(subj) else "is"
@@ -533,7 +585,8 @@ def _check_what_query(parser, t: str) -> str | None:
             return f"{subj.title()} {verb} {category_str}."
 
     # Check for properties as an alternative to "is" relations
-    properties = parser.loom.get(subj, "has_property") or []
+    properties, subj = try_with_fallback("has_property")
+    properties = properties or []
     if properties:
         verb = "are" if is_plural(subj) else "is"
         prop_display = [p.replace("_", " ") for p in properties]
@@ -556,6 +609,24 @@ def _check_what_query(parser, t: str) -> str | None:
             return f"{instance_names[0].title()} is a {subj}."
         else:
             return f"{format_list([n.title() for n in instance_names])} are {subj}."
+
+    # FALLBACK 2: Describe the entity by any action relations it has.
+    # e.g., "festival_of_tides" has no category but --celebrates--> ocean
+    # So we can say: "Festival of Tides celebrates the ocean."
+    subj_norm = normalize(subj)
+    if subj_norm in parser.loom.knowledge:
+        relations = parser.loom.knowledge[subj_norm]
+        # Look for any action-like relation (not has_instance, not reverse relations)
+        skip_relations = {"has_instance", "belongs_to", "has_open_question",
+                          "has_property", "is", "differs_from"}
+        for rel, objs in relations.items():
+            if rel in skip_relations or rel.endswith("_by") or rel.endswith("_of"):
+                continue
+            if objs:
+                obj_list = list(objs) if not isinstance(objs, list) else objs
+                obj_display = [o.replace("_", " ") for o in obj_list]
+                rel_display = rel.replace("_", " ")
+                return f"{subj.title()} {rel_display} {format_list(obj_display)}."
 
     parser.loom.add_fact(subj, "has_open_question", "identity")
 
