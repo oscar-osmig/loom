@@ -42,6 +42,12 @@ def _clean_object(obj: str) -> str:
         if marker in obj:
             obj = obj.split(marker)[0].strip()
 
+    # Truncate at prepositional phrases that add context but aren't core
+    for prep in [" for ", " with ", " about ", " during ", " since ",
+                 " after ", " before ", " until ", " near ", " between "]:
+        if prep in obj:
+            obj = obj.split(prep)[0].strip()
+
     # Clean trailing filler
     for suffix in [" too", " as well", " also", " very"]:
         if obj.endswith(suffix):
@@ -63,6 +69,7 @@ def _check_relation_patterns(parser, t: str) -> str | None:
 
     # Skip if contains copula — those are handled by _check_is_statement
     # But NOT "was/were + past participle" which is passive voice (SVO handles that)
+    from ..svo import IRREGULAR_PAST
     if " is " in t or " are " in t:
         return None
     # For was/were, only skip if it's NOT followed by a past participle (i.e., it's copula)
@@ -70,11 +77,27 @@ def _check_relation_patterns(parser, t: str) -> str | None:
         if copula in t:
             pos = t.find(copula)
             after = t[pos + len(copula):].split()[0] if t[pos + len(copula):].split() else ""
-            # If followed by past participle (-ed), let SVO handle it (passive voice)
-            if after.endswith("ed") and len(after) > 3:
+            # If followed by past participle (-ed or irregular), let SVO handle it
+            is_participle = (after.endswith("ed") and len(after) > 3) or after in IRREGULAR_PAST
+            if is_participle:
                 break  # Don't skip — SVO will extract the passive
             else:
                 return None  # Copula — let _check_is_statement handle it
+
+    # Handle modal verbs: "X can/could/will Y" → store as (X, can, Y)
+    # These are auxiliaries that Loom uses as relations, not content verbs.
+    import re as _re
+    modal_match = _re.match(r"^(.+?)\s+(can|could|cannot|can't|will|would|should|must)\s+(.+)$", t)
+    if modal_match:
+        subj = _clean_subject(modal_match.group(1))
+        modal = modal_match.group(2)
+        obj = _clean_object(modal_match.group(3))
+        if subj and obj:
+            relation = "cannot" if modal in ("cannot", "can't") else "can"
+            parser.loom.add_fact(subj, relation, obj)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation=relation, obj=obj)
+            return f"Got it, {subj} {modal} {obj}."
 
     # Try SVO extraction (handles both active and passive voice)
     svos = extract_multiple_svo(t)
@@ -163,6 +186,8 @@ def _check_becomes_pattern(parser, t: str) -> str | None:
 
 def _check_is_statement(parser, t: str) -> str | None:
     """Handle 'X is/are/was/were Y' statements, including 'X and Y are Z'."""
+    from ..svo import IRREGULAR_PAST
+
     # Skip questions - they should be handled by query handlers
     if parser._is_question(t):
         return None
@@ -188,6 +213,29 @@ def _check_is_statement(parser, t: str) -> str | None:
 
     if not subj or not obj:
         return None
+
+    # Skip passive voice: "X was/were [past_participle] [by Y]"
+    # These should be handled by SVO extraction in _check_relation_patterns
+    if verb in (" was ", " were "):
+        first_word = obj.split()[0] if obj.split() else ""
+        is_passive = (
+            (first_word.endswith("ed") and len(first_word) > 3)
+            or first_word in IRREGULAR_PAST
+        )
+        if is_passive:
+            return None  # Let _check_relation_patterns handle passive voice
+
+    # Handle "X is made from/of Y" → store as made_of relation
+    if verb == " is " and obj.startswith(("made from ", "made of ", "made out of ")):
+        for prefix in ["made out of ", "made from ", "made of "]:
+            if obj.startswith(prefix):
+                material = obj[len(prefix):].strip().rstrip(".")
+                if material:
+                    parser.loom.add_fact(subj, "made_of", material)
+                    parser.last_subject = subj
+                    parser.loom.context.update(subject=subj, relation="made_of", obj=material)
+                    return f"Got it, {subj} is {prefix}{material}."
+                break
 
     # Handle quantifiers: "some X are Y" -> X can_be Y
     quantifier = None

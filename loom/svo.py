@@ -71,6 +71,20 @@ NON_VERBS = DETERMINERS | PREPOSITIONS | CONJUNCTIONS | ADVERBS | {
 # Passive voice markers
 PASSIVE_MARKERS = {"by"}
 
+# Common irregular past tenses that don't end in -ed
+# These can't be detected by morphology alone
+IRREGULAR_PAST = {
+    "began", "begun", "became", "broke", "brought", "built", "bought",
+    "came", "caught", "chose", "did", "drew", "drove", "ate", "fell",
+    "felt", "flew", "forgot", "found", "gave", "got", "grew", "held",
+    "hid", "hit", "kept", "knew", "led", "left", "lost", "made",
+    "met", "paid", "put", "ran", "rang", "rose", "said", "sat",
+    "saw", "sent", "set", "shook", "shot", "showed", "shut", "sang",
+    "sank", "slept", "spoke", "spent", "stood", "stole", "struck",
+    "swam", "swept", "swung", "taught", "thought", "threw", "told",
+    "took", "understood", "woke", "won", "wore", "wrote",
+}
+
 
 def _looks_like_verb(word: str, position: int, words: List[str]) -> bool:
     """
@@ -97,6 +111,36 @@ def _looks_like_verb(word: str, position: int, words: List[str]) -> bool:
     # (it would be imperative mood, which Loom doesn't typically handle)
     if position == 0:
         return False
+
+    # Check if this is a known irregular past tense
+    if w in IRREGULAR_PAST:
+        return True
+
+    # Check if this is a known verb from the relations database.
+    # This is NOT hardcoding — it's using the existing knowledge as a hint.
+    # The morphological checks below still catch unknown verbs.
+    try:
+        from .parser.relations import RELATION_BY_ANY_VERB
+        if w in RELATION_BY_ANY_VERB:
+            return True
+        # Also check "verb + preposition" phrases: "live in", "feed on", etc.
+        if position + 1 < len(words):
+            phrase = f"{w} {words[position + 1].lower()}"
+            if phrase in RELATION_BY_ANY_VERB:
+                return True
+    except ImportError:
+        pass
+
+    # Check productive verb suffixes: -ate, -ize/-ise, -ify
+    # "automate", "originate", "organize", "simplify"
+    # These are almost always verbs in English.
+    if len(w) > 4 and w.endswith(("ate", "ize", "ise", "ify")):
+        # Exclude some common non-verb -ate words
+        non_verb_ate = {"climate", "imate", "private", "state", "gate", "plate",
+                        "late", "fate", "mate", "date", "rate", "estate",
+                        "chocolate", "candidate", "senate", "pirate", "primate"}
+        if w not in non_verb_ate:
+            return True
 
     # Check morphological verb indicators
     # -ed ending (past tense) but not adjective-like words
@@ -209,7 +253,22 @@ def extract_svo(text: str) -> Optional[dict]:
             # Check if next word is a past participle (-ed, irregular)
             if i + 1 < len(words):
                 next_w = words[i + 1].lower()
-                if next_w.endswith("ed") and len(next_w) > 3 and next_w not in NON_VERBS:
+                # Check if next word is a past participle:
+                # 1. Regular: ends in -ed ("founded", "elected")
+                # 2. Irregular: known past tense from relations DB ("built", "begun")
+                is_participle = (next_w.endswith("ed") and len(next_w) > 3 and next_w not in NON_VERBS)
+                if not is_participle:
+                    # Check irregular past participles
+                    if next_w in IRREGULAR_PAST:
+                        is_participle = True
+                if not is_participle:
+                    try:
+                        from .parser.relations import RELATION_BY_ANY_VERB
+                        if next_w in RELATION_BY_ANY_VERB:
+                            is_participle = True
+                    except ImportError:
+                        pass
+                if is_participle:
                     subject = " ".join(words[:i])
                     verb_word = next_w
                     rest = " ".join(words[i + 2:])

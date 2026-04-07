@@ -541,7 +541,10 @@ def _check_chit_chat(parser, t: str) -> str | None:
         return "Goodbye! Come back when you have more to teach me."
 
     # Compliments
-    if any(w in text_lower for w in ["good job", "well done", "nice", "great"]):
+    # Only match short standalone praise, not mid-sentence words
+    if text_lower in ("good job", "well done", "nice", "great", "awesome", "cool", "perfect"):
+        return "Thank you! I'm always learning."
+    if any(text_lower.startswith(w) for w in ["good job", "well done"]):
         return "Thank you! I'm always learning."
 
     # Apologies
