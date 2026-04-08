@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Loom - Knowledge Weaver</title>
+    <link rel="icon" type="image/png" href="/loom.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -71,13 +72,17 @@
         .logo-icon {
             width: 40px;
             height: 40px;
-            background: linear-gradient(135deg, var(--accent) 0%, #a855f7 100%);
             border-radius: 12px;
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.25rem;
-            font-weight: 700;
+        }
+
+        .logo-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
         .logo-text h1 {
@@ -121,6 +126,134 @@
         .header-btn.danger:hover {
             border-color: var(--error);
             color: var(--error);
+        }
+
+        /* Toast notification */
+        .loom-toast {
+            position: fixed;
+            top: 1.5rem;
+            right: 1.5rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            max-width: 420px;
+            min-width: 300px;
+            z-index: 300;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            transform: translateX(calc(100% + 2rem));
+            opacity: 0;
+            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s;
+            pointer-events: none;
+        }
+
+        .loom-toast.visible {
+            transform: translateX(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .loom-toast.success {
+            border-color: var(--success);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(34, 197, 94, 0.15);
+        }
+
+        .loom-toast.error {
+            border-color: var(--error);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(239, 68, 68, 0.15);
+        }
+
+        .loom-toast-icon {
+            font-size: 1.5rem;
+            line-height: 1;
+            flex-shrink: 0;
+            margin-top: 0.1rem;
+        }
+
+        .loom-toast-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .loom-toast-title {
+            font-weight: 600;
+            font-size: 0.9375rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .loom-toast.success .loom-toast-title { color: var(--success); }
+        .loom-toast.error .loom-toast-title { color: var(--error); }
+
+        .loom-toast-msg {
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        .loom-toast-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.25rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .loom-toast-close:hover {
+            color: var(--text-primary);
+        }
+
+        /* Drop overlay */
+        .drop-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 15, 15, 0.85);
+            backdrop-filter: blur(8px);
+            z-index: 250;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .drop-overlay.active {
+            display: flex;
+        }
+
+        .drop-overlay-content {
+            text-align: center;
+            padding: 3rem;
+            border: 2px dashed var(--accent);
+            border-radius: 24px;
+            background: rgba(99, 102, 241, 0.05);
+            animation: dropPulse 1.5s ease infinite;
+        }
+
+        @keyframes dropPulse {
+            0%, 100% { border-color: var(--accent); }
+            50% { border-color: var(--accent-hover); box-shadow: 0 0 30px var(--accent-glow); }
+        }
+
+        .drop-overlay-content svg {
+            color: var(--accent);
+            margin-bottom: 1rem;
+        }
+
+        .drop-overlay-text {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+
+        .drop-overlay-hint {
+            font-size: 0.8125rem;
+            color: var(--text-muted);
         }
 
         /* Chat Container */
@@ -1001,7 +1134,7 @@
     <div class="header">
         <div class="header-left">
             <div class="logo">
-                <div class="logo-icon">L</div>
+                <div class="logo-icon"><img src="/loom.png" alt="Loom"></div>
                 <div class="logo-text">
                     <h1>Loom</h1>
                     <p>Knowledge Weaver</p>
@@ -1015,6 +1148,13 @@
                 </svg>
                 <span>Stats</span>
             </button>
+            <button class="header-btn" onclick="document.getElementById('uploadInput').click()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                </svg>
+                <span>Train</span>
+            </button>
+            <input type="file" id="uploadInput" accept=".json,.txt" multiple style="display:none" onchange="handleMultiFileUpload(this)">
             <button class="header-btn" onclick="showVisualization()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="3"/>
@@ -1032,6 +1172,27 @@
                 </svg>
                 <span>Clear</span>
             </button>
+        </div>
+
+        <!-- Toast notification -->
+        <div class="loom-toast" id="loomToast">
+            <div class="loom-toast-icon" id="toastIcon"></div>
+            <div class="loom-toast-content">
+                <div class="loom-toast-title" id="toastTitle"></div>
+                <div class="loom-toast-msg" id="toastMsg"></div>
+            </div>
+            <button class="loom-toast-close" onclick="hideToast()">&times;</button>
+        </div>
+    </div>
+
+    <!-- Drop zone overlay -->
+    <div class="drop-overlay" id="dropOverlay">
+        <div class="drop-overlay-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <div class="drop-overlay-text">Drop to train Loom</div>
+            <div class="drop-overlay-hint">.json or .txt</div>
         </div>
     </div>
 
@@ -1408,6 +1569,7 @@
         let selectedNode = null;
         let mouseX = 0, mouseY = 0;
         let isDiscovering = false;
+        let dragStartX = 0, dragStartY = 0;
 
         // Zoom and pan state
         let zoom = 1;
@@ -1415,11 +1577,14 @@
         let panY = 0;
         let isPanning = false;
         let lastPanX = 0, lastPanY = 0;
-        const MIN_ZOOM = 0.3;
-        const MAX_ZOOM = 3;
+        const MIN_ZOOM = 0.1;
+        const MAX_ZOOM = 5;
+
+        let vizRefreshInterval = null;
 
         async function showVisualization() {
             vizOverlay.classList.add('active');
+            sessionStorage.setItem('loom_viz_open', '1');
 
             // Fetch graph data
             try {
@@ -1448,10 +1613,20 @@
             } catch (error) {
                 console.error('Failed to load graph:', error);
             }
+
+            // Auto-refresh every 30 seconds
+            if (vizRefreshInterval) clearInterval(vizRefreshInterval);
+            vizRefreshInterval = setInterval(() => {
+                if (vizOverlay.classList.contains('active')) {
+                    refreshGraph();
+                }
+            }, 30000);
         }
 
         function closeVisualization() {
             vizOverlay.classList.remove('active');
+            sessionStorage.removeItem('loom_viz_open');
+            if (vizRefreshInterval) { clearInterval(vizRefreshInterval); vizRefreshInterval = null; }
             if (animationId) {
                 cancelAnimationFrame(animationId);
                 animationId = null;
@@ -1474,10 +1649,18 @@
             isPanning = false;
         }
 
+        function resizeCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            vizCanvas.width = window.innerWidth * dpr;
+            vizCanvas.height = window.innerHeight * dpr;
+            vizCanvas.style.width = window.innerWidth + 'px';
+            vizCanvas.style.height = window.innerHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
         function initGraph(data) {
-            // Resize canvas
-            vizCanvas.width = window.innerWidth;
-            vizCanvas.height = window.innerHeight;
+            // Resize canvas with HiDPI support
+            resizeCanvas();
 
             // World coordinates - infinite space, we position nodes in a large area
             const worldCenterX = 2000;
@@ -1514,7 +1697,8 @@
                     vx: 0,
                     vy: 0,
                     radius: Math.min(18 + node.connections * 2, 35),
-                    pulsePhase: Math.random() * Math.PI * 2
+                    pulsePhase: Math.random() * Math.PI * 2,
+                    appearProgress: 1  // fully visible on initial load
                 };
             });
 
@@ -1526,7 +1710,8 @@
                 source: nodes.find(n => n.id === edge.source),
                 target: nodes.find(n => n.id === edge.target),
                 relation: edge.relation,
-                weight: edge.weight || 1
+                weight: edge.weight || 1,
+                appearProgress: 1  // fully visible on initial load
             })).filter(e => e.source && e.target);
 
             // Create potential edges (being discovered)
@@ -1548,6 +1733,10 @@
         function centerAndZoomToFit() {
             if (nodes.length === 0) return;
 
+            // Use logical (CSS) dimensions
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
             // Find bounding box of all nodes
             let minX = Infinity, maxX = -Infinity;
             let minY = Infinity, maxY = -Infinity;
@@ -1565,23 +1754,18 @@
             minY -= padding;
             maxY += padding;
 
-            // Calculate center of nodes
             const graphCenterX = (minX + maxX) / 2;
             const graphCenterY = (minY + maxY) / 2;
-
-            // Calculate zoom to fit (with some margin)
             const graphWidth = maxX - minX;
             const graphHeight = maxY - minY;
-            const zoomX = vizCanvas.width / graphWidth;
-            const zoomY = vizCanvas.height / graphHeight;
+            const zoomX = w / graphWidth;
+            const zoomY = h / graphHeight;
 
-            // Use 30% zoom as default, or fit if graph is too big
             zoom = Math.min(0.3, Math.min(zoomX, zoomY) * 0.8);
             zoom = Math.max(MIN_ZOOM, zoom);
 
-            // Center the graph
-            panX = vizCanvas.width / 2 - graphCenterX * zoom;
-            panY = vizCanvas.height / 2 - graphCenterY * zoom;
+            panX = w / 2 - graphCenterX * zoom;
+            panY = h / 2 - graphCenterY * zoom;
         }
 
         function startAnimation() {
@@ -1594,21 +1778,25 @@
         }
 
         function startDiscovery(coOccurrences, patterns, data) {
-            // Calculate totals from all discovery data
             const lonelyCount = (data.lonely_neurons || []).length;
             const gapCount = (data.transitive_gaps || []).length;
             const clusterCount = (data.clusters || []).length;
             const potentialCount = potentialEdges.length;
-            const total = coOccurrences.length + patterns.length + potentialCount + gapCount;
+            const patternCount = patterns.length;
+            // Only count meaningful discoverable connections (not raw co-occurrences)
+            const total = patternCount + potentialCount + gapCount;
 
-            // Update discovery status
-            if (total > 0 || lonelyCount > 0) {
+            if (total > 0 || lonelyCount > 0 || clusterCount > 0) {
                 isDiscovering = true;
                 discoveryDot.classList.add('active');
                 discoveryText.textContent = 'Exploring...';
 
                 discoveryCount.style.display = 'block';
-                let statusText = `${total} potential connections`;
+                let parts = [];
+                if (patternCount > 0) parts.push(`${patternCount} patterns`);
+                if (potentialCount > 0) parts.push(`${potentialCount} suggested`);
+                if (gapCount > 0) parts.push(`${gapCount} gaps`);
+                let statusText = parts.length > 0 ? parts.join(', ') : 'Monitoring';
                 if (lonelyCount > 0) {
                     statusText += `\n${lonelyCount} lonely neurons`;
                 }
@@ -1750,13 +1938,13 @@
         }
 
         function update() {
-            const damping = 0.9;
+            const damping = 0.92;
+            const maxVelocity = 8;
 
-            // Forces - no bounds, infinite space
-            const repulsion = 5000;  // Push apart (increased for better spacing)
-            const idealEdgeLength = 180;  // Connected nodes want to be this far apart (increased for readable labels)
+            const repulsion = 5000;
+            const idealEdgeLength = 180;
 
-            // Calculate graph center for gentle centering force
+            // Calculate graph center
             let graphCenterX = 0, graphCenterY = 0;
             for (const node of nodes) {
                 graphCenterX += node.x;
@@ -1765,35 +1953,42 @@
             graphCenterX /= nodes.length || 1;
             graphCenterY /= nodes.length || 1;
 
-            // Apply forces
+            // Apply forces (skip half of pairs on large graphs for performance)
+            const skipRepulsion = nodes.length > 80;
             for (let i = 0; i < nodes.length; i++) {
                 const node = nodes[i];
                 if (node === draggedNode) continue;
 
                 // Repulsion from other nodes
-                for (let j = 0; j < nodes.length; j++) {
-                    if (i === j) continue;
+                for (let j = i + 1; j < nodes.length; j++) {
+                    if (skipRepulsion && (i + j) % 2 === 0) continue;
                     const other = nodes[j];
                     const dx = node.x - other.x;
                     const dy = node.y - other.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const force = repulsion / (dist * dist);
-                    node.vx += (dx / dist) * force;
-                    node.vy += (dy / dist) * force;
+                    const distSq = dx * dx + dy * dy;
+                    if (distSq > 1000000) continue; // Skip very distant nodes
+                    const dist = Math.sqrt(distSq) || 1;
+                    const force = repulsion / distSq;
+                    const fx = (dx / dist) * force;
+                    const fy = (dy / dist) * force;
+                    node.vx += fx;
+                    node.vy += fy;
+                    if (other !== draggedNode) {
+                        other.vx -= fx;
+                        other.vy -= fy;
+                    }
                 }
 
-                // Very gentle pull toward graph center (prevents infinite drift)
+                // Gentle pull toward graph center
                 node.vx += (graphCenterX - node.x) * 0.0001;
                 node.vy += (graphCenterY - node.y) * 0.0001;
             }
 
-            // Edge attraction - spring force pulls connected nodes together
+            // Edge attraction
             for (const edge of edges) {
                 const dx = edge.target.x - edge.source.x;
                 const dy = edge.target.y - edge.source.y;
                 const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-
-                // Spring force toward ideal length
                 const displacement = dist - idealEdgeLength;
                 const springStrength = 0.05 * (edge.weight || 1);
                 const force = displacement * springStrength;
@@ -1808,16 +2003,34 @@
                 }
             }
 
-            // Apply velocity with damping - NO BOUNDS (infinite space)
+            // Apply velocity with damping and cap
             for (const node of nodes) {
                 if (node === draggedNode) continue;
                 node.vx *= damping;
                 node.vy *= damping;
+
+                // Cap velocity to prevent jitter
+                const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+                if (speed > maxVelocity) {
+                    node.vx = (node.vx / speed) * maxVelocity;
+                    node.vy = (node.vy / speed) * maxVelocity;
+                }
+
                 node.x += node.vx;
                 node.y += node.vy;
-
-                // Update pulse
                 node.pulsePhase += 0.02;
+
+                // Animate new nodes appearing
+                if (node.appearProgress !== undefined && node.appearProgress < 1) {
+                    node.appearProgress = Math.min(1, node.appearProgress + 0.02);
+                }
+            }
+
+            // Animate new edges appearing
+            for (const edge of edges) {
+                if (edge.appearProgress !== undefined && edge.appearProgress < 1) {
+                    edge.appearProgress = Math.min(1, edge.appearProgress + 0.015);
+                }
             }
 
             // Update potential edges progress
@@ -1830,8 +2043,10 @@
         }
 
         function render() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
             ctx.fillStyle = '#0a0a0a';
-            ctx.fillRect(0, 0, vizCanvas.width, vizCanvas.height);
+            ctx.fillRect(0, 0, w, h);
 
             // Apply zoom and pan transform
             ctx.save();
@@ -1915,13 +2130,9 @@
                 ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
 
                 ctx.strokeStyle = `rgba(34, 197, 94, ${edge.progress * 0.8})`;
-                // Line thickness based on confidence
                 ctx.lineWidth = 1 + (edge.confidence || 0.5) * 3;
-                ctx.shadowColor = '#22c55e';
-                ctx.shadowBlur = edge.progress * 15;
                 ctx.stroke();
                 ctx.setLineDash([]);
-                ctx.shadowBlur = 0;
             }
 
             // Draw probe particles (exploring connections)
@@ -1954,72 +2165,120 @@
                 gradient.addColorStop(0, '#4ade80');
                 gradient.addColorStop(1, '#22c55e');
                 ctx.fillStyle = gradient;
-                ctx.shadowColor = '#22c55e';
-                ctx.shadowBlur = 10;
                 ctx.fill();
-                ctx.shadowBlur = 0;
             }
 
-            // Draw edges (synapses) - clean, visible lines
-            // First pass: draw non-highlighted edges
-            for (const edge of edges) {
-                const isHighlighted = (hoveredNode && (edge.source === hoveredNode || edge.target === hoveredNode)) ||
-                                     (selectedNode && (edge.source === selectedNode || edge.target === selectedNode));
+            // Draw edges (synapses) - two passes: normal then highlighted
+            for (let pass = 0; pass < 2; pass++) {
+                for (const edge of edges) {
+                    const isHighlighted = (hoveredNode && (edge.source === hoveredNode || edge.target === hoveredNode)) ||
+                                         (selectedNode && (edge.source === selectedNode || edge.target === selectedNode));
 
-                if (isHighlighted) continue;  // Skip highlighted edges in first pass
+                    if (pass === 0 && isHighlighted) continue;
+                    if (pass === 1 && !isHighlighted) continue;
 
-                ctx.beginPath();
-                ctx.moveTo(edge.source.x, edge.source.y);
+                    const ap = edge.appearProgress !== undefined ? edge.appearProgress : 1;
+                    if (ap <= 0) continue;
 
-                // Slight curve for organic look
-                const midX = (edge.source.x + edge.target.x) / 2;
-                const midY = (edge.source.y + edge.target.y) / 2;
-                const offsetX = (edge.source.y - edge.target.y) * 0.08;
-                const offsetY = (edge.target.x - edge.source.x) * 0.08;
+                    // Ease function for smooth animation
+                    const ease = ap < 1 ? ap * ap * (3 - 2 * ap) : 1; // smoothstep
 
-                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
+                    const sx = edge.source.x;
+                    const sy = edge.source.y;
+                    const tx = edge.target.x;
+                    const ty = edge.target.y;
 
-                ctx.strokeStyle = `rgba(140, 160, 200, ${0.4 + edge.weight * 0.15})`;
-                ctx.lineWidth = 1.5 + edge.weight * 0.5;
-                ctx.stroke();
+                    const midX = (sx + tx) / 2;
+                    const midY = (sy + ty) / 2;
+                    const offX = (sy - ty) * 0.08;
+                    const offY = (tx - sx) * 0.08;
+
+                    // For new edges: draw only up to the current progress point
+                    // Quadratic bezier partial draw
+                    ctx.beginPath();
+                    ctx.moveTo(sx, sy);
+
+                    if (ease >= 1) {
+                        ctx.quadraticCurveTo(midX + offX, midY + offY, tx, ty);
+                    } else {
+                        // Partial bezier: draw up to t=ease
+                        const steps = Math.max(4, Math.floor(ease * 20));
+                        for (let s = 1; s <= steps; s++) {
+                            const t = (s / steps) * ease;
+                            const px = (1-t)*(1-t)*sx + 2*(1-t)*t*(midX+offX) + t*t*tx;
+                            const py = (1-t)*(1-t)*sy + 2*(1-t)*t*(midY+offY) + t*t*ty;
+                            ctx.lineTo(px, py);
+                        }
+                    }
+
+                    if (isHighlighted) {
+                        // Glow
+                        ctx.strokeStyle = `rgba(168, 85, 247, ${0.25 * ease})`;
+                        ctx.lineWidth = 6 + edge.weight;
+                        ctx.stroke();
+                        // Core
+                        ctx.beginPath();
+                        ctx.moveTo(sx, sy);
+                        if (ease >= 1) {
+                            ctx.quadraticCurveTo(midX + offX, midY + offY, tx, ty);
+                        } else {
+                            const steps = Math.max(4, Math.floor(ease * 20));
+                            for (let s = 1; s <= steps; s++) {
+                                const t = (s / steps) * ease;
+                                const px = (1-t)*(1-t)*sx + 2*(1-t)*t*(midX+offX) + t*t*tx;
+                                const py = (1-t)*(1-t)*sy + 2*(1-t)*t*(midY+offY) + t*t*ty;
+                                ctx.lineTo(px, py);
+                            }
+                        }
+                        ctx.strokeStyle = `rgba(192, 132, 252, ${ease})`;
+                        ctx.lineWidth = 2 + edge.weight * 0.3;
+                        ctx.stroke();
+                    } else {
+                        // New edges glow green briefly, then fade to normal
+                        const isNew = ap < 1;
+                        const alpha = (0.4 + edge.weight * 0.15) * ease;
+                        if (isNew) {
+                            ctx.strokeStyle = `rgba(74, 222, 128, ${alpha})`;
+                            ctx.lineWidth = 2 + edge.weight * 0.5;
+                        } else {
+                            ctx.strokeStyle = `rgba(140, 160, 200, ${alpha})`;
+                            ctx.lineWidth = 1.5 + edge.weight * 0.5;
+                        }
+                        ctx.stroke();
+                    }
+                }
             }
 
-            // Second pass: draw highlighted edges ON TOP with glow effect
-            for (const edge of edges) {
-                const isHighlighted = (hoveredNode && (edge.source === hoveredNode || edge.target === hoveredNode)) ||
-                                     (selectedNode && (edge.source === selectedNode || edge.target === selectedNode));
-
-                if (!isHighlighted) continue;  // Only draw highlighted edges in second pass
-
-                const midX = (edge.source.x + edge.target.x) / 2;
-                const midY = (edge.source.y + edge.target.y) / 2;
-                const offsetX = (edge.source.y - edge.target.y) * 0.08;
-                const offsetY = (edge.target.x - edge.source.x) * 0.08;
-
-                // Draw outer glow (subtle)
-                ctx.beginPath();
-                ctx.moveTo(edge.source.x, edge.source.y);
-                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
-                ctx.strokeStyle = 'rgba(168, 85, 247, 0.25)';
-                ctx.lineWidth = 6 + edge.weight;
-                ctx.stroke();
-
-                // Draw bright core line
-                ctx.beginPath();
-                ctx.moveTo(edge.source.x, edge.source.y);
-                ctx.quadraticCurveTo(midX + offsetX, midY + offsetY, edge.target.x, edge.target.y);
-                ctx.strokeStyle = '#c084fc';  // Bright purple
-                ctx.lineWidth = 2 + edge.weight * 0.3;
-                ctx.stroke();
-            }
-
-            // Draw nodes (neurons) - clean style
+            // Draw nodes (neurons) - clean style with appear animation
             for (const node of nodes) {
+                const ap = node.appearProgress !== undefined ? node.appearProgress : 1;
+                if (ap <= 0) continue;
+
+                const ease = ap < 1 ? ap * ap * (3 - 2 * ap) : 1; // smoothstep
+                const isNew = ap < 1;
+
                 const isHovered = node === hoveredNode;
                 const isSelected = node === selectedNode;
                 const isLonely = node.isLonely;
                 const pulse = Math.sin(node.pulsePhase) * 0.08 + 1;
-                const r = node.radius * (isHovered || isSelected ? 1.15 : pulse);
+                // New nodes scale up from 0
+                const scaleMultiplier = isNew ? ease : 1;
+                const r = node.radius * (isHovered || isSelected ? 1.15 : pulse) * scaleMultiplier;
+
+                if (r < 0.5) continue; // too small to draw
+
+                ctx.globalAlpha = ease;
+
+                // Expanding ring for newly appearing nodes
+                if (isNew && ease > 0.1 && ease < 0.95) {
+                    const ringRadius = node.radius * 2 * (1 + (1 - ease) * 1.5);
+                    const ringAlpha = (1 - ease) * 0.4;
+                    ctx.strokeStyle = `rgba(74, 222, 128, ${ringAlpha})`;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(node.x, node.y, ringRadius, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
 
                 // Simple outer glow for hovered/selected
                 if (isHovered || isSelected) {
@@ -2036,6 +2295,10 @@
                 const bodyGradient = ctx.createRadialGradient(node.x - r * 0.3, node.y - r * 0.3, 0, node.x, node.y, r);
                 if (isSelected) {
                     bodyGradient.addColorStop(0, '#4ade80');
+                    bodyGradient.addColorStop(1, '#22c55e');
+                } else if (isNew) {
+                    // New nodes glow green while appearing
+                    bodyGradient.addColorStop(0, '#86efac');
                     bodyGradient.addColorStop(1, '#22c55e');
                 } else if (isLonely) {
                     bodyGradient.addColorStop(0, isHovered ? '#fdba74' : '#fb923c');
@@ -2056,8 +2319,8 @@
                     ctx.stroke();
                 }
 
-                // Pulsing ring for lonely neurons to attract attention
-                if (isLonely && !isSelected) {
+                // Pulsing ring for lonely neurons
+                if (isLonely && !isSelected && !isNew) {
                     const pulseAlpha = (Math.sin(node.pulsePhase * 2) + 1) * 0.15;
                     ctx.strokeStyle = `rgba(251, 146, 60, ${pulseAlpha})`;
                     ctx.lineWidth = 2;
@@ -2066,27 +2329,30 @@
                     ctx.stroke();
                 }
 
-                // Label
-                ctx.fillStyle = '#fff';
-                ctx.font = `${isHovered ? 'bold ' : ''}${Math.min(12, r * 0.7)}px Inter, sans-serif`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-
-                const label = node.label.length > 12 ? node.label.slice(0, 10) + '...' : node.label;
-                ctx.fillText(label, node.x, node.y);
+                // Label (fade in with node)
+                if (ease > 0.3) {
+                    ctx.fillStyle = '#fff';
+                    ctx.font = `${isHovered ? 'bold ' : ''}${Math.min(12, r * 0.7)}px Inter, sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    const label = node.label.length > 12 ? node.label.slice(0, 10) + '...' : node.label;
+                    ctx.fillText(label, node.x, node.y);
+                }
 
                 // Connection count badge
-                if (node.connections > 1) {
+                if (node.connections > 1 && ease > 0.5) {
                     const badgeX = node.x + r * 0.7;
                     const badgeY = node.y - r * 0.7;
                     ctx.fillStyle = '#a855f7';
                     ctx.beginPath();
-                    ctx.arc(badgeX, badgeY, 10, 0, Math.PI * 2);
+                    ctx.arc(badgeX, badgeY, 10 * scaleMultiplier, 0, Math.PI * 2);
                     ctx.fill();
                     ctx.fillStyle = '#fff';
                     ctx.font = 'bold 9px Inter, sans-serif';
                     ctx.fillText(node.connections, badgeX, badgeY);
                 }
+
+                ctx.globalAlpha = 1;
             }
 
             // Draw hovered node info
@@ -2117,7 +2383,7 @@
                 ctx.strokeStyle = 'rgba(99, 102, 241, 0.5)';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
-                ctx.roundRect(vizCanvas.width / 2 - 40, vizCanvas.height - 50, 80, 30, 8);
+                ctx.roundRect(w / 2 - 40, h - 50, 80, 30, 8);
                 ctx.fill();
                 ctx.stroke();
 
@@ -2125,7 +2391,7 @@
                 ctx.font = '12px Inter, sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(`${Math.round(zoom * 100)}%`, vizCanvas.width / 2, vizCanvas.height - 35);
+                ctx.fillText(`${Math.round(zoom * 100)}%`, w / 2, h - 35);
             }
         }
 
@@ -2184,38 +2450,39 @@
             if (e.button === 0) {  // Left click
                 if (hoveredNode) {
                     draggedNode = hoveredNode;
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
                     vizCanvas.style.cursor = 'grabbing';
                 } else {
-                    // Left-click on empty space = start panning
                     isPanning = true;
                     lastPanX = e.clientX;
                     lastPanY = e.clientY;
                     vizCanvas.style.cursor = 'grabbing';
                     closeNeuronPopup();
                 }
+            } else if (e.button === 1) {  // Middle click
+                isPanning = true;
+                lastPanX = e.clientX;
+                lastPanY = e.clientY;
+                e.preventDefault();
             }
         });
 
         vizCanvas.addEventListener('mouseup', (e) => {
-            if (e.button === 0) {  // Left click release
-                if (draggedNode && hoveredNode === draggedNode) {
-                    // It was a click (not a drag), show popup
-                    const rect = vizCanvas.getBoundingClientRect();
-                    const clickX = e.clientX - rect.left;
-                    const clickY = e.clientY - rect.top;
-                    showNeuronPopup(draggedNode, clickX, clickY);
+            if (e.button === 0) {
+                if (draggedNode) {
+                    // Only show popup if it was a click (not a drag)
+                    const moved = Math.abs(e.clientX - dragStartX) + Math.abs(e.clientY - dragStartY);
+                    if (moved < 5) {
+                        const rect = vizCanvas.getBoundingClientRect();
+                        showNeuronPopup(draggedNode, e.clientX - rect.left, e.clientY - rect.top);
+                    }
                 }
                 draggedNode = null;
                 isPanning = false;
                 vizCanvas.style.cursor = hoveredNode ? 'pointer' : 'grab';
-            }
-        });
-
-        vizCanvas.addEventListener('click', (e) => {
-            // Also handle direct click (for when there's no drag)
-            if (hoveredNode && !draggedNode) {
-                const rect = vizCanvas.getBoundingClientRect();
-                showNeuronPopup(hoveredNode, e.clientX - rect.left, e.clientY - rect.top);
+            } else if (e.button === 1) {
+                isPanning = false;
             }
         });
 
@@ -2232,7 +2499,7 @@
             isPanning = false;
         });
 
-        // Trackpad zoom (pinch-to-zoom fires as wheel events with ctrlKey)
+        // Zoom: trackpad pinch (ctrlKey) and scroll wheel
         vizCanvas.addEventListener('wheel', (e) => {
             e.preventDefault();
 
@@ -2240,55 +2507,23 @@
             const mouseXRaw = e.clientX - rect.left;
             const mouseYRaw = e.clientY - rect.top;
 
-            // Get world coordinates before zoom
             const worldX = (mouseXRaw - panX) / zoom;
             const worldY = (mouseYRaw - panY) / zoom;
 
-            // Pinch-to-zoom (ctrlKey is set for trackpad pinch)
-            // Also handle regular scroll wheel zoom
             const zoomFactor = e.ctrlKey ? 0.02 : 0.001;
             const delta = -e.deltaY * zoomFactor;
             const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * (1 + delta)));
 
-            // Adjust pan to zoom toward mouse position
             panX = mouseXRaw - worldX * newZoom;
             panY = mouseYRaw - worldY * newZoom;
 
             zoom = newZoom;
         }, { passive: false });
 
-        // Middle-click or two-finger pan on trackpad
-        vizCanvas.addEventListener('mousedown', (e) => {
-            if (e.button === 1) { // Middle mouse button
-                isPanning = true;
-                lastPanX = e.clientX;
-                lastPanY = e.clientY;
-                e.preventDefault();
-            }
-        });
-
-        // Handle pan movement
-        const originalMouseMove = vizCanvas.onmousemove;
-        vizCanvas.addEventListener('mousemove', (e) => {
-            if (isPanning) {
-                panX += e.clientX - lastPanX;
-                panY += e.clientY - lastPanY;
-                lastPanX = e.clientX;
-                lastPanY = e.clientY;
-            }
-        });
-
-        vizCanvas.addEventListener('mouseup', (e) => {
-            if (e.button === 1) {
-                isPanning = false;
-            }
-        });
-
         // Handle window resize
         window.addEventListener('resize', () => {
             if (vizOverlay.classList.contains('active')) {
-                vizCanvas.width = window.innerWidth;
-                vizCanvas.height = window.innerHeight;
+                resizeCanvas();
             }
         });
 
@@ -2298,6 +2533,11 @@
                 closeVisualization();
             }
         });
+
+        // Restore visualizer if it was open before refresh
+        if (sessionStorage.getItem('loom_viz_open') === '1') {
+            showVisualization();
+        }
 
         // Quick command helper
         function quickCmd(cmd) {
@@ -2385,6 +2625,332 @@
             vizSearchResults.classList.remove('active');
             originalCloseViz();
         };
+
+        // --- Drag & Drop ---
+        let dragCounter = 0;
+        const dropOverlay = document.getElementById('dropOverlay');
+
+        document.addEventListener('dragenter', function(e) {
+            e.preventDefault();
+            dragCounter++;
+            if (dragCounter === 1) dropOverlay.classList.add('active');
+        });
+
+        document.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            dragCounter--;
+            if (dragCounter === 0) dropOverlay.classList.remove('active');
+        });
+
+        document.addEventListener('dragover', function(e) {
+            e.preventDefault();
+        });
+
+        document.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dragCounter = 0;
+            dropOverlay.classList.remove('active');
+
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const dt = new DataTransfer();
+                for (const f of files) dt.items.add(f);
+                const fakeInput = document.getElementById('uploadInput');
+                fakeInput.files = dt.files;
+                handleMultiFileUpload(fakeInput);
+            }
+        });
+
+        // --- File Upload & Toast ---
+        let toastTimeout = null;
+
+        function showToast(type, title, msg) {
+            const toast = document.getElementById('loomToast');
+            const icon = document.getElementById('toastIcon');
+            const titleEl = document.getElementById('toastTitle');
+            const msgEl = document.getElementById('toastMsg');
+
+            toast.className = 'loom-toast ' + type;
+            icon.textContent = type === 'success' ? '\u2713' : '\u2717';
+            titleEl.textContent = title;
+            msgEl.textContent = msg;
+
+            // Show
+            requestAnimationFrame(() => toast.classList.add('visible'));
+
+            // Auto-hide
+            if (toastTimeout) clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(hideToast, type === 'error' ? 8000 : 4000);
+        }
+
+        function hideToast() {
+            const toast = document.getElementById('loomToast');
+            toast.classList.remove('visible');
+            if (toastTimeout) { clearTimeout(toastTimeout); toastTimeout = null; }
+        }
+
+        async function handleMultiFileUpload(input) {
+            const files = Array.from(input.files);
+            if (!files.length) return;
+            input.value = '';
+
+            let totalLoaded = 0;
+            let totalErrors = 0;
+            const names = [];
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const name = file.name.toLowerCase();
+
+                if (!name.endsWith('.json') && !name.endsWith('.txt')) {
+                    totalErrors++;
+                    continue;
+                }
+
+                // Show progress toast
+                if (files.length > 1) {
+                    showToast('success', `Training ${i + 1}/${files.length}`, file.name);
+                }
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const resp = await fetch('/api/upload-training', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const result = await resp.json();
+
+                    if (resp.ok) {
+                        totalLoaded += result.loaded;
+                        names.push(file.name);
+                    } else {
+                        totalErrors++;
+                    }
+                } catch (e) {
+                    totalErrors++;
+                }
+            }
+
+            // Final toast
+            if (totalLoaded > 0) {
+                const msg = `Loaded ${totalLoaded} facts from ${names.length} file${names.length > 1 ? 's' : ''}` +
+                    (totalErrors ? ` (${totalErrors} failed)` : '') +
+                    ':\n' + names.join(', ');
+                showToast('success', 'Training Complete', msg);
+            } else {
+                showToast('error', 'Upload Failed', `No facts loaded. ${totalErrors} file(s) had errors.`);
+            }
+
+            // Refresh graph if visualizer is open
+            if (vizOverlay.classList.contains('active')) {
+                await refreshGraph();
+            } else {
+                addMessage('Uploaded: ' + names.join(', '), 'user');
+                addMessage(`Loaded ${totalLoaded} facts from ${names.length} files.`, 'assistant');
+            }
+        }
+
+        async function handleFileUpload(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            // Reset so same file can be re-uploaded
+            input.value = '';
+
+            const name = file.name.toLowerCase();
+            if (!name.endsWith('.json') && !name.endsWith('.txt')) {
+                showToast('error', 'Invalid File Type',
+                    'Only .json and .txt training files are supported.\n\n' +
+                    'JSON: [{"subject":"...","relation":"...","object":"..."},  ...]\n' +
+                    'TXT: subject | relation | object (one per line)');
+                return;
+            }
+
+            // Client-side pre-validation for JSON
+            if (name.endsWith('.json')) {
+                try {
+                    const text = await file.text();
+                    const data = JSON.parse(text);
+
+                    if (!Array.isArray(data)) {
+                        showToast('error', 'Invalid JSON Format',
+                            'Expected a JSON array: [{"subject":"...","relation":"...","object":"..."}, ...]\n\n' +
+                            'Got: ' + typeof data);
+                        return;
+                    }
+
+                    if (data.length === 0) {
+                        showToast('error', 'Empty File', 'The JSON array has no items.');
+                        return;
+                    }
+
+                    // Check first item structure
+                    const sample = data[0];
+                    const hasSubject = sample.subject || sample.s;
+                    const hasRelation = sample.relation || sample.r;
+                    const hasObject = sample.object || sample.o;
+
+                    if (!hasSubject || !hasRelation || !hasObject) {
+                        const missing = [];
+                        if (!hasSubject) missing.push('"subject"');
+                        if (!hasRelation) missing.push('"relation"');
+                        if (!hasObject) missing.push('"object"');
+                        showToast('error', 'Missing Fields',
+                            'Each item needs: subject, relation, object.\n\n' +
+                            'First item is missing: ' + missing.join(', ') + '.\n\n' +
+                            'Example:\n{"subject": "dogs", "relation": "is", "object": "mammals"}');
+                        return;
+                    }
+                } catch (e) {
+                    showToast('error', 'Invalid JSON',
+                        'Could not parse JSON: ' + e.message + '\n\nCheck for missing commas, quotes, or brackets.');
+                    return;
+                }
+            }
+
+            // Upload to server
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const resp = await fetch('/api/upload-training', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await resp.json();
+
+                if (!resp.ok) {
+                    showToast('error', 'Upload Failed', result.error || 'Unknown error.');
+                    return;
+                }
+
+                let msg = 'Loaded ' + result.loaded + ' facts from ' + result.filename + '.';
+                if (result.warnings) {
+                    msg += '\n' + result.warning_count + ' warnings (showing first ' +
+                        Math.min(result.warnings.length, 5) + '):\n' +
+                        result.warnings.join('\n');
+                }
+
+                showToast('success', 'Training Complete', msg);
+
+                // If visualizer is open, refresh the graph live
+                if (vizOverlay.classList.contains('active')) {
+                    await refreshGraph();
+                } else {
+                    // Add chat messages only when not in visualizer
+                    addMessage('Uploaded: ' + result.filename, 'user');
+                    addMessage('Loaded ' + result.loaded + ' facts.' +
+                        (result.warning_count ? ' (' + result.warning_count + ' warnings)' : ''),
+                        'assistant');
+                }
+
+            } catch (e) {
+                showToast('error', 'Connection Error', 'Could not reach the server. Is it running?');
+            }
+        }
+
+        async function refreshGraph() {
+            try {
+                const response = await fetch('/api/graph');
+                const data = await response.json();
+
+                if (data.nodes.length === 0) return;
+
+                // Track existing nodes
+                const existingIds = new Set(nodes.map(n => n.id));
+                const existingPositions = {};
+                for (const node of nodes) {
+                    existingPositions[node.id] = { x: node.x, y: node.y, vx: node.vx, vy: node.vy, radius: node.radius, pulsePhase: node.pulsePhase };
+                }
+
+                // Track existing edges
+                const existingEdgeKeys = new Set(edges.map(e => e.source.id + '|' + e.relation + '|' + e.target.id));
+
+                // Find graph center
+                let cx = 0, cy = 0;
+                for (const node of nodes) { cx += node.x; cy += node.y; }
+                cx /= nodes.length || 1;
+                cy /= nodes.length || 1;
+
+                // Rebuild nodes
+                const spreadFactor = Math.max(500, Math.sqrt(data.nodes.length) * 120);
+                nodes = data.nodes.map((node, i) => {
+                    const existing = existingPositions[node.id];
+                    if (existing) {
+                        // Existing node: keep position, update data
+                        return {
+                            id: node.id,
+                            label: node.label,
+                            connections: node.connections,
+                            relations: node.relations || {},
+                            isLonely: node.is_lonely || false,
+                            x: existing.x,
+                            y: existing.y,
+                            vx: existing.vx,
+                            vy: existing.vy,
+                            radius: Math.min(18 + node.connections * 2, 35),
+                            pulsePhase: existing.pulsePhase,
+                            appearProgress: 1  // fully visible
+                        };
+                    }
+                    // New node: start near center, animate in
+                    return {
+                        id: node.id,
+                        label: node.label,
+                        connections: node.connections,
+                        relations: node.relations || {},
+                        isLonely: node.is_lonely || false,
+                        x: cx + (Math.random() - 0.5) * spreadFactor * 0.3,
+                        y: cy + (Math.random() - 0.5) * spreadFactor * 0.3,
+                        vx: 0,
+                        vy: 0,
+                        radius: Math.min(18 + node.connections * 2, 35),
+                        pulsePhase: Math.random() * Math.PI * 2,
+                        appearProgress: 0  // start invisible, animate in
+                    };
+                });
+
+                // Rebuild edges with appear animation
+                edges = data.edges.map(edge => {
+                    const src = nodes.find(n => n.id === edge.source);
+                    const tgt = nodes.find(n => n.id === edge.target);
+                    if (!src || !tgt) return null;
+                    const key = edge.source + '|' + edge.relation + '|' + edge.target;
+                    return {
+                        source: src,
+                        target: tgt,
+                        relation: edge.relation,
+                        weight: edge.weight || 1,
+                        appearProgress: existingEdgeKeys.has(key) ? 1 : 0
+                    };
+                }).filter(Boolean);
+
+                potentialEdges = (data.potential_edges || []).map(edge => ({
+                    source: nodes.find(n => n.id === edge.source),
+                    target: nodes.find(n => n.id === edge.target),
+                    relation: edge.relation,
+                    confidence: edge.confidence || 0.5,
+                    progress: 0
+                })).filter(e => e.source && e.target);
+
+                clusters = data.clusters || [];
+                transitiveGaps = data.transitive_gaps || [];
+                lonelyNeurons = new Set((data.lonely_neurons || []).map(l => l.id));
+
+                // Update stats
+                document.getElementById('vizNeuronCount').textContent = data.nodes.length;
+                document.getElementById('vizSynapseCount').textContent = data.edges.length;
+
+                // Restart discovery
+                probeParticles = [];
+                startDiscovery(data.co_occurrences || [], data.patterns || [], data);
+
+            } catch (error) {
+                console.error('Failed to refresh graph:', error);
+            }
+        }
     </script>
 </body>
 </html>

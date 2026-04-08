@@ -4,14 +4,15 @@ A minimalistic chat interface for Loom.
 """
 
 from flask import Flask, request, jsonify, send_file
+import json
 import os
 
 from loom import Loom
 
 app = Flask(__name__)
 
-# Initialize Loom instance
-loom = Loom(verbose=False)
+# Initialize Loom instance with MongoDB
+loom = Loom(verbose=False, use_mongo=True, mongo_uri="mongodb://loom:Coltkhan22!@localhost:27017/loom_memory?authSource=loom_memory", database_name="loom_memory")
 loom.context.set_knowledge_ref(loom.knowledge)
 
 
@@ -19,6 +20,103 @@ loom.context.set_knowledge_ref(loom.knowledge)
 def index():
     """Serve the main chat page."""
     return send_file('web_chat.html')
+
+
+@app.route('/loom.png')
+def loom_icon():
+    """Serve the Loom icon."""
+    return send_file('loom.png', mimetype='image/png')
+
+
+@app.route('/api/upload-training', methods=['POST'])
+def upload_training():
+    """Upload and validate a JSON or TXT training file."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided.'}), 400
+
+    file = request.files['file']
+    filename = file.filename or ''
+
+    if not filename.lower().endswith(('.json', '.txt')):
+        return jsonify({
+            'error': 'Unsupported file type. Only .json and .txt files are accepted.'
+        }), 400
+
+    try:
+        content = file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        return jsonify({'error': 'File must be UTF-8 encoded text.'}), 400
+
+    if not content.strip():
+        return jsonify({'error': 'File is empty.'}), 400
+
+    count = 0
+    errors = []
+
+    if filename.lower().endswith('.json'):
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            return jsonify({
+                'error': f'Invalid JSON syntax: {e.msg} at line {e.lineno}.'
+            }), 400
+
+        if not isinstance(data, list):
+            return jsonify({
+                'error': 'JSON must be an array of objects. Expected: [{"subject": "...", "relation": "...", "object": "..."}, ...]'
+            }), 400
+
+        if not data:
+            return jsonify({'error': 'JSON array is empty.'}), 400
+
+        # Validate structure
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                errors.append(f'Item {i+1} is not an object.')
+                continue
+            subj = item.get('subject', item.get('s', ''))
+            rel = item.get('relation', item.get('r', ''))
+            obj = item.get('object', item.get('o', ''))
+            if not subj or not rel or not obj:
+                missing = []
+                if not subj: missing.append('subject')
+                if not rel: missing.append('relation')
+                if not obj: missing.append('object')
+                errors.append(f'Item {i+1} missing: {", ".join(missing)}.')
+                continue
+            loom.add_fact(subj, rel, obj)
+            count += 1
+
+    else:  # .txt
+        lines = content.strip().split('\n')
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '|' in line:
+                parts = [p.strip() for p in line.split('|')]
+            else:
+                parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 3:
+                errors.append(f'Line {i+1}: expected "subject | relation | object" but got {len(parts)} parts.')
+                continue
+            if not parts[0] or not parts[1] or not parts[2]:
+                errors.append(f'Line {i+1}: empty field.')
+                continue
+            loom.add_fact(parts[0], parts[1], parts[2])
+            count += 1
+
+    if errors and count == 0:
+        return jsonify({
+            'error': f'No valid facts found. {len(errors)} errors:\n' + '\n'.join(errors[:5])
+        }), 400
+
+    result = {'loaded': count, 'filename': filename}
+    if errors:
+        result['warnings'] = errors[:5]
+        result['warning_count'] = len(errors)
+
+    return jsonify(result)
 
 
 @app.route('/api/chat', methods=['POST'])
@@ -30,69 +128,104 @@ def chat():
     if not message:
         return jsonify({'response': 'Please enter a message.', 'type': 'error'})
 
-    # Check for commands (support both /cmd and cmd)
-    cmd = message.lower()
-    if cmd.startswith('/'):
-        cmd = cmd[1:]  # Strip leading slash
+    # Commands require / prefix
+    if message.startswith('/'):
+        cmd = message[1:].lower().strip()
 
-    if cmd == 'help':
-        return jsonify({
-            'response': get_help_text(),
-            'type': 'help'
-        })
+        if cmd == 'help':
+            return jsonify({'response': get_help_text(), 'type': 'help'})
 
-    elif cmd == 'show':
-        return jsonify({
-            'response': get_knowledge_summary(),
-            'type': 'info'
-        })
+        elif cmd == 'show':
+            return jsonify({'response': get_knowledge_summary(), 'type': 'info'})
 
-    elif cmd == 'activation':
-        return jsonify({
-            'response': get_activation_state(),
-            'type': 'info'
-        })
+        elif cmd == 'activation':
+            return jsonify({'response': get_activation_state(), 'type': 'info'})
 
-    elif cmd == 'weights':
-        return jsonify({
-            'response': get_weights(),
-            'type': 'info'
-        })
+        elif cmd == 'weights':
+            return jsonify({'response': get_weights(), 'type': 'info'})
 
-    elif cmd == 'stats':
-        return jsonify({
-            'response': get_stats(),
-            'type': 'info'
-        })
+        elif cmd == 'stats':
+            return jsonify({'response': get_stats(), 'type': 'info'})
 
-    elif cmd == 'forget':
-        loom.forget_all()
-        return jsonify({
-            'response': 'Memory erased. Starting fresh.',
-            'type': 'info'
-        })
+        elif cmd == 'forget':
+            loom.forget_all()
+            return jsonify({'response': 'Memory erased. Starting fresh.', 'type': 'info'})
 
-    elif cmd == 'about':
-        return jsonify({
-            'response': get_about_text(),
-            'type': 'info'
-        })
+        elif cmd == 'about':
+            return jsonify({'response': get_about_text(), 'type': 'info'})
 
-    elif cmd.startswith('analogies '):
-        concept = cmd[10:].strip()
-        return jsonify({
-            'response': get_analogies(concept),
-            'type': 'info'
-        })
+        elif cmd.startswith('analogies '):
+            concept = cmd[10:].strip()
+            return jsonify({'response': get_analogies(concept), 'type': 'info'})
 
-    elif cmd.startswith('neuron '):
-        node = cmd[7:].strip()
-        return jsonify({
-            'response': get_neuron_info(node),
-            'type': 'info'
-        })
+        elif cmd.startswith('neuron '):
+            node = cmd[7:].strip()
+            return jsonify({'response': get_neuron_info(node), 'type': 'info'})
+
+        elif cmd.startswith('frame '):
+            concept = cmd[6:].strip()
+            if concept:
+                return jsonify({
+                    'response': loom.frame_manager.format_frame(concept).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;'),
+                    'type': 'info'
+                })
+
+        elif cmd.startswith('bridges'):
+            arg = cmd[7:].strip() if len(cmd) > 7 else ""
+            return jsonify({
+                'response': loom.frame_manager.format_bridges(arg if arg else None).replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;'),
+                'type': 'info'
+            })
+
+        elif cmd == 'clusters':
+            return jsonify({
+                'response': loom.frame_manager.format_clusters().replace('\n', '<br>').replace('  ', '&nbsp;&nbsp;'),
+                'type': 'info'
+            })
+
+        elif cmd.startswith('train '):
+            from loom.trainer import train
+            pack_name = cmd[6:].strip()
+            count, msg = train(loom, pack_name)
+            return jsonify({'response': msg, 'type': 'info'})
+
+        elif cmd == 'train':
+            from loom.trainer import list_packs
+            packs = list_packs()
+            return jsonify({'response': 'Available packs: ' + ', '.join(packs), 'type': 'info'})
+
+        elif cmd.startswith('load '):
+            from loom.trainer import train_from_file
+            filepath = cmd[5:].strip()
+            count, msg = train_from_file(loom, filepath)
+            return jsonify({'response': msg, 'type': 'info'})
+
+        else:
+            return jsonify({'response': f'Unknown command: /{cmd}. Type /help for commands.', 'type': 'error'})
 
     else:
+        # Detect pasted JSON array -> load as training data
+        stripped = message.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            try:
+                import json
+                data = json.loads(stripped)
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    count = 0
+                    for item in data:
+                        subj = item.get('subject', item.get('s', ''))
+                        rel = item.get('relation', item.get('r', ''))
+                        obj = item.get('object', item.get('o', ''))
+                        if subj and rel and obj:
+                            loom.add_fact(subj, rel, obj)
+                            count += 1
+                    return jsonify({
+                        'response': f'Loaded {count} facts from pasted JSON.',
+                        'type': 'info'
+                    })
+            except (json.JSONDecodeError, ValueError):
+                pass  # Not valid JSON, fall through to normal processing
+
         # Process as natural language
         if '. ' in message or len(message) > 100:
             # Paragraph processing
@@ -159,16 +292,19 @@ Loom learns by creating neurons (concepts) and synapses (connections) from your 
 • "what are dogs?" - categories
 • "can birds fly?" - abilities
 
-<b>Commands</b>
+<b>Commands</b> (require / prefix)
 • /about - what is Loom?
 • /show - view knowledge summary
 • /neuron X - inspect concept X
+• /frame X - show concept frame
+• /bridges [X] - show attribute bridges
+• /clusters - show emergent clusters
 • /activation - show activation state
 • /weights - show strong connections
 • /analogies X - find similar concepts
 • /stats - storage statistics
 • /clear - clear chat history
-• /forget - erase memory
+• /forget - erase all memory
 • /help - show this help"""
 
 
@@ -374,43 +510,51 @@ def get_graph():
         for lonely in discovery_data.get('lonely_neurons', []):
             lonely_node_ids.add(lonely['id'])
 
-    # Create nodes from knowledge graph with full relation data
+    # Collect ALL node ids first (subjects + all targets they reference)
+    all_node_ids = set()
     for node_id, relations in knowledge.items():
-        connection_count = sum(len(targets) for targets in relations.values())
-        # Count incoming connections too
-        incoming = 0
-        for other_id, other_rels in knowledge.items():
-            if other_id != node_id:
-                for targets in other_rels.values():
-                    if node_id in targets:
-                        incoming += 1
+        all_node_ids.add(node_id)
+        for targets in relations.values():
+            for target in targets:
+                all_node_ids.add(target)
+
+    # Build incoming counts
+    incoming_counts = {}
+    for node_id, relations in knowledge.items():
+        for targets in relations.values():
+            for target in targets:
+                incoming_counts[target] = incoming_counts.get(target, 0) + 1
+
+    # Create nodes for every referenced entity
+    for node_id in all_node_ids:
+        relations = knowledge.get(node_id, {})
+        outgoing = sum(len(targets) for targets in relations.values()) if isinstance(relations, dict) else 0
+        incoming = incoming_counts.get(node_id, 0)
 
         nodes.append({
             'id': node_id,
             'label': node_id.replace('_', ' ').title(),
-            'connections': connection_count + incoming,
-            'outgoing': connection_count,
+            'connections': outgoing + incoming,
+            'outgoing': outgoing,
             'incoming': incoming,
             'is_lonely': node_id in lonely_node_ids,
-            'relations': {rel: list(targets) for rel, targets in relations.items()}
+            'relations': {rel: list(targets) for rel, targets in relations.items()} if isinstance(relations, dict) else {}
         })
         node_ids.add(node_id)
 
-    # Create edges from relations
+    # Create edges from relations (all targets now have nodes)
     for source_id, relations in knowledge.items():
+        if not isinstance(relations, dict):
+            continue
         for relation, targets in relations.items():
             for target in targets:
-                # Get connection weight if available
                 weight = loom.get_connection_weight(source_id, relation, target)
-
-                # Only include edge if target exists as a node
-                if target in node_ids:
-                    edges.append({
-                        'source': source_id,
-                        'target': target,
-                        'relation': relation,
-                        'weight': weight
-                    })
+                edges.append({
+                    'source': source_id,
+                    'target': target,
+                    'relation': relation,
+                    'weight': weight
+                })
 
     # Get discovery data
     co_occurrences = []
@@ -476,6 +620,14 @@ def get_graph():
 
 
 if __name__ == '__main__':
+    storage_type = "MongoDB" if loom.use_mongo else "JSON File"
     print("\n  Loom Web Interface")
+    print(f"  Storage: {storage_type}")
+    if loom.use_mongo:
+        print(f"  Database: loom_memory")
+    else:
+        print(f"  File: loom_memory/loom_memory.json")
+    stats = loom.get_stats()
+    print(f"  Loaded: {stats['nodes']} neurons, {stats['facts']} synapses")
     print("  Open http://localhost:5000 in your browser\n")
     app.run(debug=True, port=5000)

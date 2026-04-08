@@ -95,6 +95,9 @@ def print_help():
     print("    context        Show current context")
     print("    activation     Show activation state")
     print("    weights        Show strong connections")
+    print("    frame X        Show concept frame (attribute slots)")
+    print("    bridges [X]    Show attribute bridges between concepts")
+    print("    clusters       Show emergent category clusters")
     print("    analogies X    Find concepts similar to X")
     print("    chain X R      Trace reasoning chain")
     print("    train [pack]   Load knowledge pack")
@@ -257,6 +260,20 @@ def run_cli():
                 print()
             else:
                 print("  Usage: analogies <concept>")
+
+        elif cmd.startswith("frame "):
+            concept = cmd[6:].strip()
+            if concept:
+                loom.show_frame(concept)
+            else:
+                print("  Usage: frame <concept>")
+
+        elif cmd.startswith("bridges"):
+            arg = cmd[7:].strip() if len(cmd) > 7 else ""
+            loom.show_bridges(arg if arg else None)
+
+        elif cmd == "clusters":
+            loom.show_clusters()
 
         elif cmd == "entities":
             # Show salient entities in context

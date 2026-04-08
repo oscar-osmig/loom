@@ -42,7 +42,8 @@ class JSONFallbackStorage:
             "facts": [],
             "procedures": {},
             "inferences": [],
-            "conflicts": []
+            "conflicts": [],
+            "frames": {}
         }
 
         if os.path.exists(self.memory_file):
@@ -412,12 +413,22 @@ class JSONFallbackStorage:
         self._data["conflicts"] = []
         self._save()
 
+    def save_frames(self, frame_data: dict):
+        """Persist frame data."""
+        self._data["frames"] = frame_data
+        self._save()
+
+    def load_frames(self) -> dict:
+        """Load frame data."""
+        return self._data.get("frames", {})
+
     def forget_all(self):
         self._data = {
             "facts": [],
             "procedures": {},
             "inferences": [],
-            "conflicts": []
+            "conflicts": [],
+            "frames": {}
         }
         if os.path.exists(self.memory_file):
             os.remove(self.memory_file)

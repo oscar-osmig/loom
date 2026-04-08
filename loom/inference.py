@@ -252,6 +252,12 @@ class InferenceEngine:
                 if bridges and self.loom.verbose:
                     print(f"       [bridges: created {len(bridges)} category connections]")
 
+            # Run frame system every 5 cycles (15 seconds)
+            if cycle_count % 5 == 0 and hasattr(self.loom, 'frame_manager'):
+                propagated = self.loom.frame_manager.run_background_cycle()
+                if propagated and self.loom.verbose:
+                    print(f"       [frames: {len(propagated)} category propagations]")
+
             if not self.loom.recent:
                 continue
 

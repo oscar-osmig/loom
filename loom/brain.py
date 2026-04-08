@@ -30,6 +30,7 @@ from .chunker import TextChunker
 from .training import TrainingMixin
 from .discovery import DiscoveryMixin, ConnectionDiscoveryEngine
 from .processing import HebbianMixin, ProcessingMixin
+from .frames import FrameManager
 from .curiosity import QuestionGenerator, CuriosityNodeManager
 from .speech import SpeechProcessor, ASRBackend
 from .rules import RuleMemory, RuleEngine, Rule, RuleStatus
@@ -178,6 +179,10 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
         # Connection discovery engine for background pattern learning
         self.discovery_engine = ConnectionDiscoveryEngine(self)
+
+        # Frame-based knowledge layer for attribute slots and emergent categorization
+        self.frame_manager = FrameManager(self)
+        self.frame_manager.hydrate_from_knowledge()
 
     def _init_loom_knowledge(self):
         """Initialize default knowledge about Loom itself."""
@@ -479,6 +484,16 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             if o_resolution != "new" and o_resolution != "exact":
                 print(f"       [resolved: '{obj}' -> '{o}' ({o_resolution})]")
 
+        # Intercept possibility statements: "can be X", "could be X", etc.
+        # These have malformed objects like "be orange" that fail validation.
+        # Route to frame manager as potential attributes instead of storing
+        # junk triples in the knowledge graph.
+        if r in ("can", "could", "may", "might") and (
+                o.startswith("be ") or o.startswith("be_")):
+            if hasattr(self, 'frame_manager'):
+                self.frame_manager._handle_can_relation(s, o)
+            return
+
         # Validate entity names to prevent pollution
         if not self._is_valid_entity(s) or not self._is_valid_entity(o):
             if self.verbose:
@@ -505,7 +520,12 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                 else:
                     confidence = confidence_for_source(source_type)
             else:
-                confidence = CONFIDENCE_HIGH  # Default: user-stated
+                # Check structural extraction confidence hint (hedging)
+                if (self._input_properties and
+                        self._input_properties.get("confidence_hint") == "low"):
+                    confidence = CONFIDENCE_LOW
+                else:
+                    confidence = CONFIDENCE_HIGH  # Default: user-stated
 
         # Check for conflicts before adding
         if _save:
@@ -529,6 +549,9 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             # Also strengthen Hebbian weight on repeated mention
             if hasattr(self, 'strengthen_connection'):
                 self.strengthen_connection(s, r, o, amount=0.3)
+            # Notify frame manager of consolidation (may promote potential->confirmed)
+            if hasattr(self, 'frame_manager'):
+                self.frame_manager.on_fact_added(s, r, o, new_confidence)
             return  # Don't add duplicate
 
         # Use input context as fallback if no explicit context provided
@@ -558,6 +581,10 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
             if self.verbose:
                 print(f"       [woven: {s} ~> {r} ~> {o} ({confidence})]")
+
+            # Update frame system
+            if hasattr(self, 'frame_manager'):
+                self.frame_manager.on_fact_added(s, r, o, confidence)
 
             # Run immediate inference for important relations
             if _save and hasattr(self, 'inference'):
@@ -990,6 +1017,29 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             self.storage.clear_inferences()
         if hasattr(self, 'context'):
             self.context = ConversationContext()
+        if hasattr(self, 'frame_manager'):
+            self.frame_manager.reset()
+        if hasattr(self, 'discovery_engine'):
+            self.discovery_engine._patterns.clear()
+            self.discovery_engine._co_occurrence.clear()
+            self.discovery_engine._created_neurons.clear()
+            self.discovery_engine._pending_neurons.clear()
+            self.discovery_engine._stats = {
+                "patterns_found": 0,
+                "neurons_created": 0,
+                "relations_added": 0,
+            }
+        if hasattr(self, 'activation'):
+            self.activation.activations.clear()
+            self.activation.activation_sources.clear()
+            self.activation.activation_times.clear()
+            self.activation.activation_history.clear()
+            self.activation.assemblies.clear()
+            self.activation.coactivation_counts.clear()
+            self.activation.topic_concepts.clear()
+        if hasattr(self, 'connection_weights'):
+            self.connection_weights.clear()
+            self.connection_times.clear()
         # Re-add self-knowledge
         self.add_fact("self", "name_is", self.name)
         # Re-add loom knowledge
@@ -1289,6 +1339,18 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                 print(f"  |    THEN {rule.conclusion}")
                 print(f"  |    (support: {rule.support_count}, confidence: {rule.confidence:.2f})")
         print("  +-----------------------------------------------+\n")
+
+    def show_frame(self, concept: str):
+        """Display a concept's frame with all attribute slots."""
+        print(self.frame_manager.format_frame(concept))
+
+    def show_bridges(self, concept: str = None):
+        """Display attribute bridges (all or for a specific concept)."""
+        print(self.frame_manager.format_bridges(concept))
+
+    def show_clusters(self):
+        """Display emergent clusters."""
+        print(self.frame_manager.format_clusters())
 
     def show_candidate_rules(self):
         """Display candidate rules awaiting confirmation."""

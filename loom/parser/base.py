@@ -22,6 +22,7 @@ from .constants import (
 
 from ..simplifier import SentenceSimplifier
 from ..advanced_simplifier import AdvancedSimplifier
+from ..structural import StructuralExtractor
 
 
 class Parser:
@@ -36,8 +37,10 @@ class Parser:
         self.curiosity_frequency = 5  # Show curiosity question every N responses
         self.simplifier = SentenceSimplifier()  # For basic simplification
         self.advanced_simplifier = AdvancedSimplifier()  # For complex sentences
+        self.structural = StructuralExtractor()  # Structural metadata extraction
         self._current_context = None  # Context for current input
         self._current_properties = None  # Properties for current input
+        self._structural_result = None  # Current structural extraction result
 
     def _detect_context_and_properties(self, text: str) -> tuple:
         """
@@ -72,9 +75,59 @@ class Parser:
         if text:
             ctx, props = self._detect_context_and_properties(text)
 
+        # Apply structural confidence hint (hedging lowers confidence)
+        if confidence is None and self._structural_result:
+            sr = self._structural_result
+            if sr.confidence == "low":
+                confidence = "low"
+
         self.loom.add_fact(subject, relation, obj,
                           confidence=confidence,
                           context=ctx, properties=props)
+
+    def _store_structural_extras(self):
+        """Store extra facts from structural extraction (comparisons, quantities, purposes)."""
+        sr = self._structural_result
+        if not sr:
+            return
+
+        # Store extra facts (comparisons, purposes, superlative categories)
+        for subj, rel, obj in sr.extra_facts:
+            if subj and rel and obj:
+                self.loom.add_fact(subj, rel, obj, confidence="high")
+
+        # Store quantities via frame system (brain.add_fact rejects short
+        # numeric objects like "4", so we route through frames directly)
+        if sr.quantities and hasattr(self.loom, 'frame_manager'):
+            subject = self.last_subject
+            clean_words = sr.clean_text.lower().split()
+            if clean_words:
+                for verb_marker in ["have", "has", "had", "are", "is", "weigh", "weighs"]:
+                    if verb_marker in clean_words:
+                        idx = clean_words.index(verb_marker)
+                        if idx > 0:
+                            subject = " ".join(clean_words[:idx])
+                            break
+                if not subject:
+                    subject = clean_words[0]
+            if subject:
+                from ..normalizer import normalize
+                subj_n = normalize(subject)
+                for q in sr.quantities:
+                    unit = q["unit"]
+                    number = q["number"]
+                    # Store as frame quantity slot
+                    self.loom.frame_manager._fill_slot(
+                        subj_n, "quantities",
+                        f"{unit}:{number}",
+                        potential=False
+                    )
+
+        # Route hedged facts to potential tier in frame system
+        if sr.confidence == "low" and hasattr(self.loom, 'frame_manager'):
+            # The fact was already stored by the parser with low confidence.
+            # The frame system will see the low confidence from _input_properties.
+            pass
 
     def _try_get(self, subject: str, relation: str) -> list:
         """Try to get facts, attempting both singular and plural forms."""
@@ -305,6 +358,28 @@ class Parser:
         self.loom._input_context = ctx
         self.loom._input_properties = props
 
+        # --- Structural extraction: strip modifiers, extract metadata ---
+        sr = self.structural.extract(original)
+        self._structural_result = sr
+
+        # Apply extracted metadata to input properties
+        if sr.confidence:
+            props["confidence_hint"] = sr.confidence
+            self.loom._input_properties = props
+        if sr.temporal:
+            props["temporal"] = sr.temporal
+            self.loom._input_properties = props
+        if sr.frequency:
+            props["frequency"] = sr.frequency
+            self.loom._input_properties = props
+        if sr.degree:
+            props["degree"] = sr.degree
+            self.loom._input_properties = props
+
+        # Use cleaned text (fillers/hedging/temporal stripped)
+        if sr.clean_text and sr.clean_text != original:
+            t = sr.clean_text.lower().strip().rstrip("?.")
+
         # Check for if-then rules FIRST (before any preprocessing)
         if t.startswith('if ') and ' then ' in t:
             result = self._check_if_then_rule(t)
@@ -460,8 +535,13 @@ class Parser:
             for check in checks:
                 result = check(t)
                 if result:
+                    # Store extra facts from structural extraction
+                    self._store_structural_extras()
                     # Optionally add curiosity question to response
                     return self._maybe_add_curiosity(result)
+
+            # Even if no pattern matched, store structural extras (purpose, comparisons)
+            self._store_structural_extras()
 
             # If nothing matched, maybe ask for clarification
             return self._maybe_add_curiosity(self._maybe_ask_clarification(t))
@@ -469,6 +549,7 @@ class Parser:
             # Clear input context after processing
             self.loom._input_context = None
             self.loom._input_properties = None
+            self._structural_result = None
 
     # Import handler methods from other modules
     # These are bound to the class in __init__.py
