@@ -75,6 +75,7 @@ class TrainingMixin:
     def train_facts(self: "Loom", facts: list) -> int:
         """
         Train from a list of (subject, relation, object) tuples.
+        Uses pandas batch loading for efficiency.
 
         Args:
             facts: List of tuples like [("dogs", "is", "animals"), ...]
@@ -82,6 +83,10 @@ class TrainingMixin:
         Returns:
             Number of facts added.
         """
+        if len(facts) >= 10:
+            result = self.add_facts_batch(facts)
+            return result["inserted"]
+        # Small batches: use single-add for full pipeline (activation, inference)
         count = 0
         for fact in facts:
             if len(fact) >= 3:
@@ -95,6 +100,7 @@ class TrainingMixin:
     def train_dicts(self: "Loom", facts: list) -> int:
         """
         Train from a list of dictionaries.
+        Uses pandas batch loading for efficiency.
 
         Args:
             facts: List of dicts like [{"subject": "dogs", "relation": "is", "object": "animals"}, ...]
@@ -103,17 +109,25 @@ class TrainingMixin:
         Returns:
             Number of facts added.
         """
-        count = 0
+        # Normalize short-form keys to standard keys
+        normalized = []
         for item in facts:
             subj = item.get('subject', item.get('s', ''))
             rel = item.get('relation', item.get('r', ''))
             obj = item.get('object', item.get('o', ''))
-
             if subj and rel and obj:
-                existing = self.get(subj, rel) or []
-                if obj.lower() not in [e.lower() for e in existing]:
-                    self.add_fact(subj, rel, obj)
-                    count += 1
+                normalized.append({"subject": subj, "relation": rel, "object": obj})
+
+        if len(normalized) >= 10:
+            result = self.add_facts_batch(normalized)
+            return result["inserted"]
+        # Small batches: use single-add
+        count = 0
+        for item in normalized:
+            existing = self.get(item["subject"], item["relation"]) or []
+            if item["object"].lower() not in [e.lower() for e in existing]:
+                self.add_fact(item["subject"], item["relation"], item["object"])
+                count += 1
         return count
 
     def train_statements(self: "Loom", statements: list, silent: bool = True) -> int:
@@ -136,13 +150,13 @@ class TrainingMixin:
                 count += 1
         return count
 
-    def train_batch(self: "Loom", facts: list, batch_size: int = 100) -> int:
+    def train_batch(self: "Loom", facts: list, batch_size: int = 500) -> int:
         """
-        Train from a large list of facts in batches (more efficient for MongoDB).
+        Train from a large list of facts using pandas batch loading.
 
         Args:
-            facts: List of (subject, relation, object) tuples
-            batch_size: Number of facts per batch
+            facts: List of (subject, relation, object) tuples or dicts
+            batch_size: Number of facts per batch (default 500)
 
         Returns:
             Number of facts added.
@@ -150,7 +164,8 @@ class TrainingMixin:
         count = 0
         for i in range(0, len(facts), batch_size):
             batch = facts[i:i + batch_size]
-            count += self.train_facts(batch)
+            result = self.add_facts_batch(batch)
+            count += result["inserted"]
         return count
 
     @staticmethod

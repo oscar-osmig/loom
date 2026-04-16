@@ -608,6 +608,127 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if r == "color":
             self.add_fact(obj, "is_color_of", subject, confidence, _save, _propagate=False)
 
+    def add_facts_batch(self, facts: list, speaker_id: str = None) -> dict:
+        """
+        Batch-add facts using pandas for normalization, deduplication, and
+        conflict detection, then bulk-insert into MongoDB.
+
+        Args:
+            facts: List of tuples (subject, relation, object) or dicts with those keys.
+            speaker_id: Optional speaker ID to tag all facts.
+
+        Returns:
+            dict with keys: inserted, duplicates, conflicts, invalid, total
+        """
+        import pandas as pd
+        from datetime import datetime, timezone
+        from .models import SourceType
+
+        if not facts:
+            return {"inserted": 0, "duplicates": 0, "conflicts": 0, "invalid": 0, "total": 0}
+
+        # --- Build DataFrame ---
+        rows = []
+        for f in facts:
+            if isinstance(f, (list, tuple)) and len(f) >= 3:
+                rows.append({"subject": str(f[0]), "relation": str(f[1]), "object": str(f[2])})
+            elif isinstance(f, dict) and "subject" in f and "relation" in f and "object" in f:
+                rows.append({"subject": str(f["subject"]), "relation": str(f["relation"]), "object": str(f["object"])})
+        if not rows:
+            return {"inserted": 0, "duplicates": 0, "conflicts": 0, "invalid": 0, "total": len(facts)}
+
+        df = pd.DataFrame(rows)
+        total = len(df)
+
+        # --- Vectorized normalization ---
+        df["subject"] = df["subject"].apply(normalize)
+        df["object"] = df["object"].apply(normalize)
+        df["relation"] = df["relation"].str.lower().str.strip()
+
+        # --- Validate entities ---
+        valid_mask = df["subject"].apply(self._is_valid_entity) & df["object"].apply(self._is_valid_entity)
+        invalid_count = int((~valid_mask).sum())
+        df = df[valid_mask].copy()
+
+        # --- Deduplicate within batch ---
+        before_dedup = len(df)
+        df = df.drop_duplicates(subset=["subject", "relation", "object"])
+        batch_dupes = before_dedup - len(df)
+
+        # --- Within-batch conflict detection (fast, no DB lookups) ---
+        conflict_pairs = set()
+        neg_map = {"is": "is_not", "can": "cannot", "has": "has_not"}
+        for pos, neg in neg_map.items():
+            pos_df = df[df["relation"] == pos][["subject", "object"]].rename(columns={"object": "pos_obj"})
+            neg_df = df[df["relation"] == neg][["subject", "object"]].rename(columns={"object": "neg_obj"})
+            if not pos_df.empty and not neg_df.empty:
+                merged = pos_df.merge(neg_df, on="subject")
+                matches = merged[merged["pos_obj"] == merged["neg_obj"]]
+                for _, row in matches.iterrows():
+                    conflict_pairs.add((row["subject"], row["pos_obj"]))
+        conflict_count = len(conflict_pairs)
+
+        # --- Build MongoDB documents ---
+        now = datetime.now(timezone.utc).isoformat()
+        docs = []
+        for _, row in df.iterrows():
+            props = {
+                "confidence": "high",
+                "temporal": "always",
+                "scope": "universal",
+                "conditions": [],
+                "source_type": "user",
+                "created_at": now,
+                "premises": [],
+                "rule_id": None,
+                "speaker_id": speaker_id or getattr(self, '_session_speaker_id', None),
+                "derivation_id": None,
+            }
+            docs.append({
+                "instance": self.storage.instance_name,
+                "subject": row["subject"],
+                "relation": row["relation"],
+                "object": row["object"],
+                "context": "general",
+                "properties": props,
+            })
+
+        # --- Bulk insert ---
+        inserted = self.storage.add_facts_bulk(docs) if docs else 0
+        db_dupes = len(docs) - inserted
+
+        # --- Post-batch processing ---
+        self._invalidate_cache()
+
+        # Strengthen connections for all inserted facts
+        for _, row in df.iterrows():
+            key = (row["subject"], row["relation"], row["object"])
+            self.connection_weights[key] = self.connection_weights.get(key, 1.0) + 0.1
+
+        # Queue all for background inference (single pass)
+        for _, row in df.iterrows():
+            self.recent.append((row["subject"], row["relation"], row["object"]))
+
+        # Light activation for batch — just mark concepts as recently seen
+        # Full spreading activation happens in the background inference loop
+        try:
+            for concept in df["subject"].unique()[:50]:
+                self.activation.activate(concept, amount=0.3)
+        except Exception:
+            pass
+
+        if self.verbose:
+            print(f"  [batch] {inserted} inserted, {batch_dupes + db_dupes} duplicates, "
+                  f"{conflict_count} conflicts, {invalid_count} invalid / {total} total")
+
+        return {
+            "inserted": inserted,
+            "duplicates": batch_dupes + db_dupes,
+            "conflicts": conflict_count,
+            "invalid": invalid_count,
+            "total": total,
+        }
+
     def retract_fact(self, subject: str, relation: str, obj: str,
                      cascade: bool = True):
         """

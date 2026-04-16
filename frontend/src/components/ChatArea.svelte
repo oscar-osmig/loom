@@ -1,5 +1,5 @@
 <script>
-    import { chat, clearMessages } from '../stores/chat.svelte.js';
+    import { chat, clearMessages, formatConversation } from '../stores/chat.svelte.js';
     import { isAuthenticated } from '../stores/auth.svelte.js';
     import { ui } from '../stores/ui.svelte.js';
     import { fileStore } from '../stores/files.svelte.js';
@@ -28,6 +28,26 @@
     function handleClear() {
         clearMessages();
     }
+
+    let copyToast = $state(false);
+
+    async function handleContextMenu(e) {
+        // Only intercept right-click on the messages area (not on about/settings/file pages)
+        if (!messagesContainer || !messagesContainer.contains(e.target)) return;
+        if (chat.messages.length === 0) return;
+
+        // If user has selected text, let native copy work
+        const selection = window.getSelection();
+        if (selection && selection.toString().trim().length > 0) return;
+
+        e.preventDefault();
+        const text = formatConversation();
+        try {
+            await navigator.clipboard.writeText(text);
+            copyToast = true;
+            setTimeout(() => { copyToast = false; }, 2000);
+        } catch {}
+    }
 </script>
 
 <div class="chat-area">
@@ -46,7 +66,8 @@
                 </svg>
             </button>
 
-            <div class="messages" bind:this={messagesContainer}>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="messages" bind:this={messagesContainer} oncontextmenu={handleContextMenu}>
                 {#if chat.messages.length === 0}
                     <WelcomeBox />
                 {/if}
@@ -57,6 +78,10 @@
 
                 <TypingIndicator />
             </div>
+
+            {#if copyToast}
+                <div class="copy-toast">Conversation copied!</div>
+            {/if}
         {/if}
     </div>
 
@@ -119,4 +144,29 @@
     .messages::-webkit-scrollbar-track { background: transparent; }
     .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .messages::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    .copy-toast {
+        position: absolute;
+        bottom: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--accent);
+        color: white;
+        padding: 0.5rem 1.25rem;
+        border-radius: 10px;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        z-index: 10;
+        pointer-events: none;
+        animation: toastIn 0.2s ease, toastOut 0.3s ease 1.7s forwards;
+    }
+
+    @keyframes toastIn {
+        from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+        to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes toastOut {
+        from { opacity: 1; }
+        to { opacity: 0; }
+    }
 </style>

@@ -21,6 +21,7 @@ from .normalizer import normalize, prettify
 from .grammar import is_plural, format_list
 from .svo import AUXILIARIES, NON_VERBS, PREPOSITIONS
 from .parser.relations import get_relation_for_verb
+from .composer import gather_facts, compose_response, trace_reasoning
 
 
 # ─── Question structure parsing ───
@@ -424,24 +425,30 @@ def _reverse_lookup(loom, relation: str, target: str) -> list:
 
 def _handle_what_is(loom, subject: str) -> Optional[str]:
     """
-    Handle "what is X?" queries by checking multiple relation types.
-    Mirrors the logic from _check_what_query but works generically.
+    Handle "what is X?" queries using the response composer for rich answers.
+    Falls back to simple lookup if composer returns nothing.
     """
-    # Strip leading articles
     subj = subject
     for prefix in ["the ", "a ", "an "]:
         if subj.lower().startswith(prefix):
             subj = subj[len(prefix):]
 
-    # Helper: try subject variants + adjective stripping for "Adj Noun of X" patterns
+    # Try composer first for a rich, multi-fact response
+    try:
+        facts = gather_facts(loom, subj)
+        if facts["direct"] or facts["inherited"]:
+            rich = compose_response(loom, "what_is", subj, facts=facts)
+            if rich:
+                return rich
+    except Exception:
+        pass
+
+    # Fallback: simple single-relation lookup
     def _try_stripped(relation):
-        # Try subject as-is and singular/plural variants
         for variant in _try_subject_variants(subj):
             result = loom.get(variant, relation)
             if result:
                 return result, variant
-
-        # Try stripping a leading adjective
         subj_norm = normalize(subj)
         words = subj.split()
         if len(words) >= 3:
@@ -454,43 +461,11 @@ def _handle_what_is(loom, subject: str) -> Optional[str]:
                         return result, variant
         return None, subj
 
-    # 1. Check "is" relation (category)
-    facts, matched_subj = _try_stripped("is")
-    if facts:
+    facts_simple, matched_subj = _try_stripped("is")
+    if facts_simple:
         verb = "are" if is_plural(matched_subj) else "is"
-        categories = [f.replace("_", " ") for f in facts]
+        categories = [f.replace("_", " ") for f in facts_simple]
         return f"{matched_subj.title()} {verb} {format_list(categories)}."
-
-    # 2. Check has_instance (reverse: "what is the dish of X?" → find instances)
-    if "of" in subj.split():
-        instances, matched_subj = _try_stripped("has_instance")
-        if instances:
-            verb = "are" if is_plural(matched_subj) else "is"
-            display = [i.replace("_", " ") for i in instances]
-            return f"{format_list([d.title() for d in display])} {verb} the {matched_subj}."
-
-    # 3. Check properties
-    props, matched_subj = _try_stripped("has_property")
-    props = props or []
-    if props:
-        verb = "are" if is_plural(matched_subj) else "is"
-        display = [p.replace("_", " ") for p in props]
-        return f"{matched_subj.title()} {verb} {format_list(display)}."
-
-    # 4. Check any action relations (describe by what it does)
-    subj_norm = normalize(subj)
-    if subj_norm in loom.knowledge:
-        relations = loom.knowledge[subj_norm]
-        skip_rels = {"has_instance", "belongs_to", "has_open_question",
-                     "has_property", "is", "differs_from"}
-        for rel, objs in relations.items():
-            if rel in skip_rels or rel.endswith("_by") or rel.endswith("_of"):
-                continue
-            if objs:
-                obj_list = list(objs) if not isinstance(objs, list) else objs
-                obj_display = [o.replace("_", " ") for o in obj_list]
-                rel_display = rel.replace("_", " ")
-                return f"{subj.title()} {rel_display} {format_list(obj_display)}."
 
     return None
 
@@ -538,8 +513,14 @@ def handle_query(parser, text: str) -> Optional[str]:
 
             return f"{subject.title()} {verb_display} {format_list(display)}."
 
-        # Forward lookup failed — try location-specific relations for "where"
+        # Forward lookup failed — try composer for "where"
         if q_word == "where":
+            try:
+                rich = compose_response(loom, "where", subject)
+                if rich:
+                    return rich
+            except Exception:
+                pass
             for loc_rel in ["lives_in", "located_in", "found_in",
                             f"{verb}_in", f"{verb}s_in"]:
                 for subj_v in _try_subject_variants(subject):
@@ -568,8 +549,15 @@ def handle_query(parser, text: str) -> Optional[str]:
     # ─── Yes/No questions ───
     if direction == "yesno" and subject and obj:
         if q_word == "can":
+            # Try composer for a richer answer
+            try:
+                rich = compose_response(loom, "can", subject, relation="can", target=obj)
+                if rich:
+                    return rich
+            except Exception:
+                pass
+            # Fallback: simple lookup
             obj_norm = normalize(obj)
-            # Try subject variants for singular/plural
             for subj_v in _try_subject_variants(subject):
                 abilities = loom.get(subj_v, "can") or []
                 for ability in abilities:
@@ -579,7 +567,7 @@ def handle_query(parser, text: str) -> Optional[str]:
                 for inability in cannot:
                     if obj_norm in normalize(inability):
                         return f"No, {subject} cannot {obj}."
-            return None  # Let specialized handler try
+            return None
 
         elif q_word == "is":
             # "is X Y?" → check if X is Y

@@ -345,7 +345,17 @@ class Parser:
                     responses.append(stmt)
 
         if responses:
-            return f"Got it: {'; '.join(responses)}."
+            try:
+                from ..composer import acknowledge_fact
+                ctx = self.loom.context
+                s = ctx.last_subject or ""
+                r = ctx.last_relation or ""
+                o = ctx.last_object or ""
+                if s and r:
+                    return acknowledge_fact(s, r, o, "; ".join(responses))
+            except Exception:
+                pass
+            return f"Noted: {'; '.join(responses)}."
 
         return None
 
@@ -362,9 +372,47 @@ class Parser:
         for check in checks:
             result = check(t)
             if result:
-                return result
+                return self._enrich_acknowledgment(result, t)
 
         return None
+
+    def _enrich_acknowledgment(self, response: str, original_text: str = "") -> str:
+        """Replace bland 'Got it' responses with varied, natural acknowledgments."""
+        if not response:
+            return response
+        # Only transform responses starting with "Got it" or "Noted"
+        if not (response.startswith("Got it") or response == "Got it."):
+            return response
+
+        # Extract the fact content from "Got it, X rel Y."
+        content = response
+        for prefix in ["Got it, ", "Got it: ", "Got it — ", "Got it. ", "Got it "]:
+            if content.startswith(prefix):
+                content = content[len(prefix):]
+                break
+        content = content.rstrip(".").strip()
+
+        # If content is empty (bare "Got it."), use original text as content
+        if not content or content == "Got it":
+            content = original_text.strip().rstrip(".") if original_text else ""
+
+        if not content:
+            return response
+
+        # Deterministic variety based on content hash
+        import hashlib
+        seed = int(hashlib.md5(content.encode()).hexdigest()[:8], 16)
+
+        templates = [
+            f"Noted — {content}.",
+            f"I see, {content}.",
+            f"Understood. {content.capitalize() if content[0].islower() else content}.",
+            f"Interesting — {content}.",
+            f"I'll remember that: {content}.",
+            f"Good to know. {content.capitalize() if content[0].islower() else content}.",
+        ]
+
+        return templates[seed % len(templates)]
 
     def parse(self, text: str) -> str:
         """Parse input text and update knowledge. Returns natural language response."""
@@ -477,6 +525,8 @@ class Parser:
             self._check_contrast_pattern,        # "X are A, while Y are B" - early!
             self._check_name_query,
             self._check_self_identity_query,     # "what are you?" - self-identity query
+            self._check_describe_query,          # "tell me about X", "describe X" — composer-backed
+            self._check_why_query,               # "why do/can/is X Y?" — composer-backed
             self._check_generic_query,           # Generic SVO-based query engine (handles most questions)
             self._check_negation,
             self._check_color_query,
@@ -553,6 +603,8 @@ class Parser:
             for check in checks:
                 result = check(t)
                 if result:
+                    # Enrich bland acknowledgments with varied phrasing
+                    result = self._enrich_acknowledgment(result, text)
                     # Store extra facts from structural extraction
                     self._store_structural_extras()
                     # Optionally add curiosity question to response
@@ -822,6 +874,58 @@ class Parser:
     def _check_differ_query(self, t: str) -> str | None:
         from .queries import _check_differ_query
         return _check_differ_query(self, t)
+
+    def _check_describe_query(self, t: str) -> str | None:
+        """Handle 'tell me about X', 'describe X', 'what do you know about X'."""
+        import re
+        from ..composer import gather_facts, compose_response
+        match = re.match(
+            r"(?:tell\s+me\s+(?:more\s+)?about|describe|what\s+do\s+you\s+know\s+about"
+            r"|what\s+about|explain)\s+(.+)",
+            t, re.IGNORECASE
+        )
+        if not match:
+            return None
+        concept = match.group(1).strip().rstrip("?.").strip()
+        if concept.lower() in ("you", "yourself", "loom"):
+            return None  # Let self-identity handler deal with this
+        if not concept or len(concept) < 2:
+            return None
+        try:
+            facts = gather_facts(self.loom, concept)
+            if facts["direct"] or facts["inherited"]:
+                result = compose_response(self.loom, "describe", concept, facts=facts)
+                if result:
+                    return result
+        except Exception:
+            pass
+        # Concept not found — give a helpful response
+        display = concept.replace("_", " ")
+        return f"I don't know about {display} yet. Teach me by telling me facts about it!"
+
+    def _check_why_query(self, t: str) -> str | None:
+        """Handle 'why' questions using reasoning chain tracer."""
+        import re
+        from ..composer import gather_facts, compose_response
+        match = re.match(
+            r"why\s+(?:do|does|can|is|are)\s+(.+?)\s+(\w+)\s+(.+)",
+            t, re.IGNORECASE
+        )
+        if not match:
+            match = re.match(r"why\s+(?:do|does|can|is|are)\s+(.+)", t, re.IGNORECASE)
+            if match:
+                concept = match.group(1).strip().rstrip("?.")
+                try:
+                    return compose_response(self.loom, "why", concept)
+                except Exception:
+                    pass
+            return None
+        subj, verb, obj = match.group(1).strip(), match.group(2).strip(), match.group(3).strip().rstrip("?.")
+        try:
+            return compose_response(self.loom, "why", subj, relation=verb, target=obj)
+        except Exception:
+            pass
+        return None
 
     def _check_what_query(self, t: str) -> str | None:
         from .queries import _check_what_query

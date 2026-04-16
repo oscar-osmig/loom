@@ -191,6 +191,23 @@ class MongoStorage:
         except DuplicateKeyError:
             return False
 
+    def add_facts_bulk(self, docs: list) -> int:
+        """
+        Bulk-insert pre-built fact documents into MongoDB.
+        Skips duplicates silently. Returns count of successfully inserted docs.
+        """
+        if not docs:
+            return 0
+        try:
+            result = self.db.facts.insert_many(docs, ordered=False)
+            return len(result.inserted_ids)
+        except Exception as e:
+            # BulkWriteError contains partial results — count successes
+            if hasattr(e, 'details'):
+                inserted = e.details.get('nInserted', 0)
+                return inserted
+            return 0
+
     def _normalize_fact(self, fact: dict) -> dict:
         """Normalize a fact to Quad + Properties format (for backward compat)."""
         if "context" not in fact:
@@ -568,11 +585,16 @@ class MongoStorage:
 
     def get_stats(self) -> dict:
         """Get storage statistics."""
+        # Count inferences from facts collection (source_type = inference/inheritance/rule)
+        inferred_count = self.db.facts.count_documents({
+            "instance": self.instance_name,
+            "properties.source_type": {"$in": ["inference", "inheritance", "rule", "discovery"]}
+        })
         return {
             "nodes": self.get_node_count(),
             "facts": self.get_fact_count(),
             "procedures": self.db.procedures.count_documents({"instance": self.instance_name}),
-            "inferences": self.db.inferences.count_documents({"instance": self.instance_name}),
+            "inferences": inferred_count,
             "conflicts": self.db.conflicts.count_documents({"instance": self.instance_name})
         }
 
