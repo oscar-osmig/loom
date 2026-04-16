@@ -6,19 +6,37 @@ A minimalistic chat interface for Loom.
 from flask import Flask, request, jsonify, send_file
 import json
 import os
+import pathlib
 
 from loom import Loom
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='')
 
-# Initialize Loom instance with MongoDB
-loom = Loom(verbose=False, use_mongo=True, mongo_uri="mongodb://loom:Coltkhan22!@localhost:27017/loom_memory?authSource=loom_memory", database_name="loom_memory")
+# Initialize Loom instance with MongoDB (connection string loaded from MONGO_URI env var)
+loom = Loom(verbose=False, use_mongo=True, database_name="loom_memory")
 loom.context.set_knowledge_ref(loom.knowledge)
+
+
+def is_admin(email: str) -> bool:
+    """Check if the given email matches the admin email from environment."""
+    admin_email = os.environ.get('ADMIN_EMAIL', '')
+    return bool(email and admin_email and email.lower() == admin_email.lower())
+
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Return public client-side configuration."""
+    return jsonify({
+        'google_client_id': os.environ.get('google_client_id', '')
+    })
 
 
 @app.route('/')
 def index():
-    """Serve the main chat page."""
+    """Serve the Svelte SPA (falls back to legacy HTML if not built)."""
+    static_index = os.path.join(app.static_folder, 'index.html')
+    if os.path.exists(static_index):
+        return send_file(static_index)
     return send_file('web_chat.html')
 
 
@@ -28,27 +46,39 @@ def loom_icon():
     return send_file('loom.png', mimetype='image/png')
 
 
-@app.route('/api/upload-training', methods=['POST'])
-def upload_training():
-    """Upload and validate a JSON or TXT training file."""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided.'}), 400
+def forget_user_facts(username: str) -> int:
+    """Remove all facts created by a specific user."""
+    result = loom.storage.db.facts.delete_many({
+        "instance": loom.storage.instance_name,
+        "properties.speaker_id": username
+    })
+    count = result.deleted_count
 
-    file = request.files['file']
+    # Rebuild in-memory cache
+    if count > 0:
+        loom._invalidate_cache()
+        # Rebuild frame manager from remaining knowledge
+        if hasattr(loom, 'frame_manager'):
+            loom.frame_manager.reset()
+            loom.frame_manager.hydrate_from_knowledge()
+
+    return count
+
+
+def _process_training_file(file) -> dict:
+    """Process a single training file. Returns dict with loaded/errors/filename."""
     filename = file.filename or ''
 
     if not filename.lower().endswith(('.json', '.txt')):
-        return jsonify({
-            'error': 'Unsupported file type. Only .json and .txt files are accepted.'
-        }), 400
+        return {'error': f'{filename}: unsupported file type.', 'loaded': 0, 'filename': filename}
 
     try:
         content = file.read().decode('utf-8')
     except UnicodeDecodeError:
-        return jsonify({'error': 'File must be UTF-8 encoded text.'}), 400
+        return {'error': f'{filename}: not UTF-8.', 'loaded': 0, 'filename': filename}
 
     if not content.strip():
-        return jsonify({'error': 'File is empty.'}), 400
+        return {'error': f'{filename}: empty.', 'loaded': 0, 'filename': filename}
 
     count = 0
     errors = []
@@ -57,66 +87,92 @@ def upload_training():
         try:
             data = json.loads(content)
         except json.JSONDecodeError as e:
-            return jsonify({
-                'error': f'Invalid JSON syntax: {e.msg} at line {e.lineno}.'
-            }), 400
+            return {'error': f'{filename}: invalid JSON at line {e.lineno}.', 'loaded': 0, 'filename': filename}
 
-        if not isinstance(data, list):
-            return jsonify({
-                'error': 'JSON must be an array of objects. Expected: [{"subject": "...", "relation": "...", "object": "..."}, ...]'
-            }), 400
+        if not isinstance(data, list) or not data:
+            return {'error': f'{filename}: JSON must be a non-empty array.', 'loaded': 0, 'filename': filename}
 
-        if not data:
-            return jsonify({'error': 'JSON array is empty.'}), 400
-
-        # Validate structure
         for i, item in enumerate(data):
             if not isinstance(item, dict):
-                errors.append(f'Item {i+1} is not an object.')
+                errors.append(f'{filename} item {i+1}: not an object.')
                 continue
             subj = item.get('subject', item.get('s', ''))
             rel = item.get('relation', item.get('r', ''))
             obj = item.get('object', item.get('o', ''))
             if not subj or not rel or not obj:
-                missing = []
-                if not subj: missing.append('subject')
-                if not rel: missing.append('relation')
-                if not obj: missing.append('object')
-                errors.append(f'Item {i+1} missing: {", ".join(missing)}.')
                 continue
             loom.add_fact(subj, rel, obj)
             count += 1
-
-    else:  # .txt
-        lines = content.strip().split('\n')
-        for i, line in enumerate(lines):
+    else:
+        for i, line in enumerate(content.strip().split('\n')):
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-            if '|' in line:
-                parts = [p.strip() for p in line.split('|')]
-            else:
-                parts = [p.strip() for p in line.split(',')]
-            if len(parts) < 3:
-                errors.append(f'Line {i+1}: expected "subject | relation | object" but got {len(parts)} parts.')
-                continue
-            if not parts[0] or not parts[1] or not parts[2]:
-                errors.append(f'Line {i+1}: empty field.')
-                continue
-            loom.add_fact(parts[0], parts[1], parts[2])
-            count += 1
-
-    if errors and count == 0:
-        return jsonify({
-            'error': f'No valid facts found. {len(errors)} errors:\n' + '\n'.join(errors[:5])
-        }), 400
+            parts = [p.strip() for p in (line.split('|') if '|' in line else line.split(','))]
+            if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
+                loom.add_fact(parts[0], parts[1], parts[2])
+                count += 1
 
     result = {'loaded': count, 'filename': filename}
     if errors:
         result['warnings'] = errors[:5]
-        result['warning_count'] = len(errors)
+    return result
 
+
+@app.route('/api/upload-training', methods=['POST'])
+def upload_training():
+    """Upload and validate a single JSON or TXT training file."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided.'}), 400
+
+    upload_user = request.form.get('user', '')
+    if upload_user:
+        loom._session_speaker_id = upload_user
+
+    result = _process_training_file(request.files['file'])
+    if 'error' in result and result['loaded'] == 0:
+        return jsonify(result), 400
     return jsonify(result)
+
+
+@app.route('/api/upload-training-batch', methods=['POST'])
+def upload_training_batch():
+    """Upload and process up to 50 training files in a single request."""
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': 'No files provided.'}), 400
+
+    if len(files) > 50:
+        return jsonify({'error': 'Maximum 50 files per batch.'}), 400
+
+    upload_user = request.form.get('user', '')
+    if upload_user:
+        loom._session_speaker_id = upload_user
+
+    total_loaded = 0
+    file_results = []
+    errors = []
+
+    for file in files:
+        result = _process_training_file(file)
+        total_loaded += result.get('loaded', 0)
+        file_results.append({'filename': result['filename'], 'loaded': result.get('loaded', 0)})
+        if 'error' in result:
+            errors.append(result['error'])
+
+    # Rebuild frames once after all files are processed
+    if total_loaded > 0 and hasattr(loom, 'frame_manager'):
+        loom.frame_manager.hydrate_from_knowledge()
+
+    response = {
+        'total_loaded': total_loaded,
+        'files_processed': len(file_results),
+        'files': file_results,
+    }
+    if errors:
+        response['errors'] = errors
+
+    return jsonify(response)
 
 
 @app.route('/api/chat', methods=['POST'])
@@ -124,16 +180,22 @@ def chat():
     """Process a chat message and return response."""
     data = request.json
     message = data.get('message', '').strip()
+    user = data.get('user', '').strip()
+    email = data.get('email', '').strip()
 
     if not message:
         return jsonify({'response': 'Please enter a message.', 'type': 'error'})
+
+    # Tag all facts with the current user
+    if user:
+        loom._session_speaker_id = user
 
     # Commands require / prefix
     if message.startswith('/'):
         cmd = message[1:].lower().strip()
 
         if cmd == 'help':
-            return jsonify({'response': get_help_text(), 'type': 'help'})
+            return jsonify({'response': get_help_text(admin=is_admin(email)), 'type': 'help'})
 
         elif cmd == 'show':
             return jsonify({'response': get_knowledge_summary(), 'type': 'info'})
@@ -147,9 +209,18 @@ def chat():
         elif cmd == 'stats':
             return jsonify({'response': get_stats(), 'type': 'info'})
 
-        elif cmd == 'forget':
+        elif cmd == 'forget-all':
+            if not is_admin(email):
+                return jsonify({'response': 'Permission denied. Only admins can erase all memory.', 'type': 'error'})
             loom.forget_all()
-            return jsonify({'response': 'Memory erased. Starting fresh.', 'type': 'info'})
+            return jsonify({'response': 'All memory erased. Starting fresh.', 'type': 'info'})
+
+        elif cmd == 'forget':
+            if user:
+                count = forget_user_facts(user)
+                return jsonify({'response': f'Erased {count} of your facts.', 'type': 'info'})
+            else:
+                return jsonify({'response': 'No user identified. Sign in first.', 'type': 'error'})
 
         elif cmd == 'about':
             return jsonify({'response': get_about_text(), 'type': 'info'})
@@ -277,9 +348,9 @@ Unlike statistical or vector-based AI, Loom relies on explicit symbolic represen
 • Temporal awareness for time-sensitive facts"""
 
 
-def get_help_text():
-    """Return help text."""
-    return """<b>How Loom Works</b>
+def get_help_text(admin=False):
+    """Return help text, filtering admin commands for non-admins."""
+    text = """<b>How Loom Works</b>
 Loom learns by creating neurons (concepts) and synapses (connections) from your statements.
 
 <b>Teaching</b>
@@ -304,8 +375,15 @@ Loom learns by creating neurons (concepts) and synapses (connections) from your 
 • /analogies X - find similar concepts
 • /stats - storage statistics
 • /clear - clear chat history
-• /forget - erase all memory
+• /forget - erase your own facts
 • /help - show this help"""
+
+    if admin:
+        text += "\n• /forget-all - erase all memory (admin)"
+        text += "\n• /train [pack] - load training pack (admin)"
+        text += "\n• /load [file] - load from file (admin)"
+
+    return text
 
 
 def get_knowledge_summary():
@@ -362,11 +440,9 @@ def get_weights():
 def get_stats():
     """Get storage statistics."""
     stats = loom.get_stats()
-    storage_type = "MongoDB" if loom.use_mongo else "JSON File"
-
     return f"""<b>Storage Statistics</b>
 
-Storage: {storage_type}
+Storage: MongoDB
 Neurons: {stats['nodes']}
 Synapses: {stats['facts']}
 Procedures: {stats['procedures']}
@@ -481,6 +557,26 @@ def process_audio():
             os.remove(tmp_path)
 
 
+@app.route('/api/check-nickname', methods=['GET'])
+def check_nickname():
+    """Check if a nickname is available (not already used by another user)."""
+    name = request.args.get('name', '').strip()
+    if not name:
+        return jsonify({'available': False, 'reason': 'Empty name'})
+
+    try:
+        existing = loom.storage.db.facts.distinct(
+            'properties.speaker_id',
+            {'instance': loom.storage.instance_name}
+        )
+        # Case-insensitive check
+        taken = any(s.lower() == name.lower() for s in existing if s)
+        return jsonify({'available': not taken})
+    except Exception:
+        # Fallback: allow it if we can't check
+        return jsonify({'available': True})
+
+
 @app.route('/api/questions', methods=['GET'])
 def get_questions():
     """Get curiosity engine questions."""
@@ -510,6 +606,18 @@ def get_graph():
         for lonely in discovery_data.get('lonely_neurons', []):
             lonely_node_ids.add(lonely['id'])
 
+    # Collect creators (speaker_id) per node from stored facts
+    node_creators = {}
+    pipeline = [
+        {"$match": {"instance": loom.storage.instance_name, "properties.speaker_id": {"$exists": True, "$ne": None}}},
+        {"$group": {"_id": "$subject", "creators": {"$addToSet": "$properties.speaker_id"}}}
+    ]
+    try:
+        for doc in loom.storage.db.facts.aggregate(pipeline):
+            node_creators[doc["_id"]] = set(doc["creators"])
+    except Exception:
+        pass
+
     # Collect ALL node ids first (subjects + all targets they reference)
     all_node_ids = set()
     for node_id, relations in knowledge.items():
@@ -531,24 +639,27 @@ def get_graph():
         outgoing = sum(len(targets) for targets in relations.values()) if isinstance(relations, dict) else 0
         incoming = incoming_counts.get(node_id, 0)
 
+        creators = list(node_creators.get(node_id, []))
         nodes.append({
             'id': node_id,
             'label': node_id.replace('_', ' ').title(),
             'connections': outgoing + incoming,
-            'outgoing': outgoing,
-            'incoming': incoming,
             'is_lonely': node_id in lonely_node_ids,
-            'relations': {rel: list(targets) for rel, targets in relations.items()} if isinstance(relations, dict) else {}
+            'is_system': node_id == 'loom',
+            'creators': creators
         })
         node_ids.add(node_id)
 
     # Create edges from relations (all targets now have nodes)
+    # Pre-fetch all connection weights for fast lookup
+    weights = loom.connection_weights
     for source_id, relations in knowledge.items():
         if not isinstance(relations, dict):
             continue
         for relation, targets in relations.items():
             for target in targets:
-                weight = loom.get_connection_weight(source_id, relation, target)
+                key = (source_id, relation, target)
+                weight = weights.get(key, 1.0)
                 edges.append({
                     'source': source_id,
                     'target': target,
@@ -620,13 +731,8 @@ def get_graph():
 
 
 if __name__ == '__main__':
-    storage_type = "MongoDB" if loom.use_mongo else "JSON File"
     print("\n  Loom Web Interface")
-    print(f"  Storage: {storage_type}")
-    if loom.use_mongo:
-        print(f"  Database: loom_memory")
-    else:
-        print(f"  File: loom_memory/loom_memory.json")
+    print(f"  Storage: MongoDB")
     stats = loom.get_stats()
     print(f"  Loaded: {stats['nodes']} neurons, {stats['facts']} synapses")
     print("  Open http://localhost:5000 in your browser\n")

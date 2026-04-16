@@ -286,10 +286,28 @@ class Parser:
     def _maybe_add_curiosity(self, response: str) -> str:
         """
         Optionally append a curiosity question to the response.
-        Currently disabled - answers should be direct without interruptions.
-        Curiosity questions can still be accessed via get_curiosity_prompt().
+        Surfaces high-priority questions (>= 6.0) at most once every 5 turns.
+        Skips during correction/clarification mode.
         """
-        # Disabled: return response directly without adding curiosity prompts
+        self._response_count += 1
+
+        # Don't interrupt corrections or clarifications
+        if hasattr(self.loom, 'context') and self.loom.context.mode in ("clarifying", "correcting"):
+            return response
+
+        # Gate to at most once every N turns
+        if self._response_count % self.curiosity_frequency != 0:
+            return response
+
+        if not hasattr(self.loom, 'curiosity'):
+            return response
+
+        question = self.loom.curiosity.get_next_question()
+        if question and question.priority >= 6.0:
+            self.loom.curiosity.mark_asked(question)
+            prompt = self.loom.curiosity.format_question_prompt(question)
+            return f"{response}\n\nBy the way, I'm curious: {prompt}"
+
         return response
 
     def get_curiosity_prompt(self) -> str | None:

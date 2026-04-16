@@ -156,6 +156,26 @@ class InferenceEngine:
                         self.loom.strengthen_connection(subject, "related_through", node)
                         self.loom.strengthen_connection(obj, "related_through", node)
 
+                    # Persist strong co-activations as facts so they survive decay
+                    if level >= 0.5:
+                        for src, bridge in ((subject, node), (obj, node)):
+                            existing = self.loom.get(src, "related_through") or []
+                            if bridge not in existing:
+                                derivation_id = str(uuid.uuid4())[:8]
+                                self.loom.add_fact(
+                                    src, "related_through", bridge,
+                                    confidence="low",
+                                    provenance={
+                                        "source_type": "inference",
+                                        "rule_id": "co_activation",
+                                        "premises": [
+                                            {"subject": subject, "relation": "co_activated", "object": node},
+                                            {"subject": obj, "relation": "co_activated", "object": node},
+                                        ],
+                                        "derivation_id": derivation_id,
+                                    }
+                                )
+
                     if self.loom.verbose:
                         print(f"       [co-activation: {subject} & {obj} share {node}]")
 

@@ -1,3 +1,11 @@
+# Secrets
+.env
+
+# Build output
+/static/assets/
+/static/index.html
+frontend/node_modules/
+
 # IDE and cache
 .claude
 .idea/
@@ -19,3 +27,6 @@ research.txt
 training_guide.txt
 RESEARCH_ENHANCEMENTS.md
 notes.txt
+
+/training
+/issues

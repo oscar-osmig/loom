@@ -96,22 +96,21 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
     """
 
     def __init__(self, name: str = "loom", verbose: bool = False,
-                 use_mongo: bool = True, mongo_uri: str = "mongodb://localhost:27017",
-                 database_name: str = "loom", memory_file: str = "loom_memory/loom_memory.json"):
+                 mongo_uri: str = None, database_name: str = "loom",
+                 # Legacy params kept for backwards compat — ignored
+                 use_mongo: bool = True, memory_file: str = None):
         self.name = name
         self.verbose = verbose  # Show debug output when True
 
-        # Initialize storage backend (MongoDB or JSON fallback)
-        self.storage = get_storage(
-            use_mongo=use_mongo,
-            connection_string=mongo_uri,
+        # Initialize MongoDB storage
+        storage_kwargs = dict(
             database_name=database_name,
             instance_name=name,
-            memory_file=memory_file
         )
-
-        # Track actual storage type (may have fallen back to JSON)
-        self.use_mongo = isinstance(self.storage, MongoStorage)
+        if mongo_uri:
+            storage_kwargs["connection_string"] = mongo_uri
+        self.storage = get_storage(**storage_kwargs)
+        self.use_mongo = True
 
         # In-memory cache for fast access (synced with storage)
         self._knowledge_cache = None
@@ -120,6 +119,7 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Current input context (set by parser during processing)
         self._input_context = None
         self._input_properties = None
+        self._session_speaker_id = None  # Set by web app, persists across parse calls
 
         # Runtime state (not persisted)
         self.conflicts = []  # Current session conflicts
@@ -570,6 +570,10 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             props["rule_id"] = provenance.get("rule_id")
             props["speaker_id"] = provenance.get("speaker_id")
             props["derivation_id"] = provenance.get("derivation_id")
+
+        # Ensure speaker_id from session
+        if self._session_speaker_id and not props.get("speaker_id"):
+            props["speaker_id"] = self._session_speaker_id
 
         # Add to storage with context and properties
         added = self.storage.add_fact(s, r, o, confidence,
@@ -1028,6 +1032,7 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
                 "patterns_found": 0,
                 "neurons_created": 0,
                 "relations_added": 0,
+                "scans_completed": 0,
             }
         if hasattr(self, 'activation'):
             self.activation.activations.clear()
@@ -1040,9 +1045,11 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if hasattr(self, 'connection_weights'):
             self.connection_weights.clear()
             self.connection_times.clear()
-        # Re-add self-knowledge
-        self.add_fact("self", "name_is", self.name)
-        # Re-add loom knowledge
+        if hasattr(self, 'curiosity_node_manager'):
+            self.curiosity_node_manager = CuriosityNodeManager(self)
+        if hasattr(self, 'question_generator'):
+            self.question_generator = QuestionGenerator(self)
+        # Re-add loom self-knowledge only
         self._init_loom_knowledge()
 
     def show_conflicts(self):

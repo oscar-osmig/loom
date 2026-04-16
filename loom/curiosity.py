@@ -760,7 +760,27 @@ class QuestionGenerator:
                     if entity and entity in self.loom.knowledge:
                         centrality_boost += len(self.loom.knowledge[entity]) * 0.1
 
-        return base_priority + recency_boost + min(centrality_boost, 2.0)
+        # Spaced repetition: boost priority for facts not seen recently
+        staleness_boost = 0.0
+        if hasattr(self.loom, 'connection_times'):
+            now = time.time()
+            for fact in question.related_facts:
+                if not isinstance(fact, dict):
+                    continue
+                subj = fact.get("subject", "")
+                rel = fact.get("relation", "")
+                obj = fact.get("object", "")
+                if subj and rel and obj:
+                    key = (subj, rel, obj)
+                    last_used = self.loom.connection_times.get(key)
+                    if last_used is not None:
+                        age = now - last_used
+                        if age > 3600:
+                            staleness_boost += 2.0
+                        elif age > 600:
+                            staleness_boost += 1.0
+
+        return base_priority + recency_boost + min(centrality_boost, 2.0) + min(staleness_boost, 4.0)
 
     def _is_likely_intermediate(self, entity: str) -> bool:
         """Check if entity is likely an intermediate in a causal chain."""

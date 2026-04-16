@@ -1,56 +1,66 @@
 """
 Loom Storage Module.
 
-Provides storage backends for the knowledge graph:
-- MongoStorage: MongoDB-based storage for production use
-- JSONFallbackStorage: JSON file-based storage for development/fallback
+MongoDB-only storage backend for the knowledge graph.
 
 Usage:
-    from loom.storage import get_storage, MongoStorage, JSONFallbackStorage
+    from loom.storage import get_storage, MongoStorage
 
-    # Automatic selection with fallback
-    storage = get_storage(use_mongo=True)
-
-    # Or explicitly choose backend
-    storage = MongoStorage(connection_string="mongodb://localhost:27017")
-    storage = JSONFallbackStorage(memory_file="my_data.json")
+    storage = get_storage()
+    storage = MongoStorage(connection_string="mongodb://...")
 """
 
 import logging
+import os
 
 from .mongo import MongoStorage, PYMONGO_AVAILABLE
-from .json_fallback import JSONFallbackStorage
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['MongoStorage', 'JSONFallbackStorage', 'get_storage', 'PYMONGO_AVAILABLE']
+def _load_env():
+    """Load .env file into os.environ if not already set."""
+    import pathlib
+    env_path = pathlib.Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+_load_env()
+
+__all__ = ['MongoStorage', 'get_storage', 'PYMONGO_AVAILABLE']
 
 
-def get_storage(use_mongo: bool = True, **kwargs):
+def get_storage(**kwargs):
     """
-    Factory function to get appropriate storage backend.
-    Falls back to JSON if MongoDB is not available.
+    Get MongoDB storage backend.
 
     Args:
-        use_mongo: Whether to try using MongoDB (default True)
-        **kwargs: Arguments passed to the storage backend
-            - connection_string: MongoDB connection URI
+        **kwargs: Arguments passed to MongoStorage
+            - connection_string: MongoDB connection URI (defaults to MONGO_URI env var)
             - database_name: Name of the database to use
             - instance_name: Name of this Loom instance
-            - memory_file: Path to JSON file for fallback storage
 
     Returns:
-        Storage backend instance (MongoStorage or JSONFallbackStorage)
+        MongoStorage instance
     """
-    memory_file = kwargs.pop("memory_file", "loom_memory/loom_memory.json")
+    # Pop legacy kwargs that callers may still pass
+    kwargs.pop("memory_file", None)
+    kwargs.pop("use_mongo", None)
 
-    if use_mongo and PYMONGO_AVAILABLE:
-        try:
-            return MongoStorage(**kwargs)
-        except Exception as e:
-            logger.warning(f"MongoDB not available, falling back to JSON: {e}")
-            return JSONFallbackStorage(memory_file)
-    else:
-        if use_mongo and not PYMONGO_AVAILABLE:
-            logger.info("pymongo not installed, using JSON storage. Install with: pip install pymongo")
-        return JSONFallbackStorage(memory_file)
+    # Use MONGO_URI from environment if no connection_string was explicitly provided
+    if "connection_string" not in kwargs:
+        env_uri = os.environ.get("MONGO_URI")
+        if env_uri:
+            kwargs["connection_string"] = env_uri
+
+    if not PYMONGO_AVAILABLE:
+        raise ImportError("pymongo is required. Install with: pip install pymongo")
+
+    return MongoStorage(**kwargs)

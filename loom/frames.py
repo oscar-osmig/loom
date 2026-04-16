@@ -724,10 +724,59 @@ class FrameManager:
         # Update clusters
         self.update_clusters()
 
+        # Write strong frame similarities back to the knowledge graph
+        self._write_similarity_facts()
+
         # Apply pending propagations
         applied = self.apply_pending_propagations()
 
         return applied
+
+    def _write_similarity_facts(self):
+        """
+        For concept pairs with frame similarity >= 0.7, persist a similar_to
+        fact in the knowledge graph so the inference and curiosity engines see it.
+        Only writes facts that don't already exist.
+        """
+        SIMILARITY_THRESHOLD = 0.7
+        concepts = [c for c in self._frames if c not in SKIP_CONCEPTS]
+
+        for i, ca in enumerate(concepts):
+            for cb in concepts[i + 1:]:
+                sim = self.compute_similarity(ca, cb)
+                if sim < SIMILARITY_THRESHOLD:
+                    continue
+
+                # Check both directions to avoid duplicates
+                existing_a = self.loom.get(ca, "similar_to") or []
+                if cb in existing_a:
+                    continue
+                existing_b = self.loom.get(cb, "similar_to") or []
+                if ca in existing_b:
+                    continue
+
+                provenance = {
+                    "source_type": "inference",
+                    "rule_id": "frame_similarity",
+                    "premises": [
+                        {"type": "frame_similarity", "similarity": round(sim, 3)},
+                    ],
+                }
+
+                self.loom.add_fact(
+                    ca, "similar_to", cb,
+                    confidence="medium",
+                    provenance=provenance,
+                )
+                # similar_to is symmetric
+                self.loom.add_fact(
+                    cb, "similar_to", ca,
+                    confidence="medium",
+                    provenance=provenance,
+                )
+
+                if self.loom.verbose:
+                    print(f"       [frame: {ca} similar_to {cb} (sim={sim:.2f})]")
 
     def _cleanup_empty_slots(self):
         """Remove empty non-default slots from all frames."""

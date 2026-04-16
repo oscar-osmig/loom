@@ -33,15 +33,35 @@ class HebbianMixin:
         key = (normalize(subject), relation.lower(), normalize(obj))
         return self.connection_weights.get(key, INITIAL_WEIGHT)
 
+    def _get_recent_avg_weight(self: "Loom", n: int = 20) -> float:
+        """
+        Compute average weight of the N most recently strengthened connections.
+        Used as the BCM sliding threshold to prevent runaway LTP.
+        """
+        if not self.connection_times:
+            return INITIAL_WEIGHT
+        recent = sorted(self.connection_times.items(), key=lambda x: x[1], reverse=True)[:n]
+        weights = [self.connection_weights.get(key, INITIAL_WEIGHT) for key, _ in recent]
+        return sum(weights) / len(weights)
+
     def strengthen_connection(self: "Loom", subject: str, relation: str, obj: str,
                               amount: float = STRENGTHENING_FACTOR):
         """
         Strengthen a connection (Hebbian: cells that fire together wire together).
-        Called when a connection is activated or co-activated.
+        Uses BCM-style sliding threshold: strong connections get dampened (LTD-like),
+        weak/new connections get boosted (LTP), preventing runaway dominant pathways.
         """
         key = (normalize(subject), relation.lower(), normalize(obj))
         current = self.connection_weights.get(key, INITIAL_WEIGHT)
-        new_weight = min(current + amount, MAX_WEIGHT)
+
+        # BCM sliding threshold based on recent activity
+        threshold = self._get_recent_avg_weight() * 0.8
+        if current > threshold:
+            effective_amount = amount * 0.5   # LTD-like dampening for already-strong connections
+        else:
+            effective_amount = amount * 1.5   # LTP boost for weak/new connections
+
+        new_weight = min(current + effective_amount, MAX_WEIGHT)
         self.connection_weights[key] = new_weight
         self.connection_times[key] = time.time()
 
