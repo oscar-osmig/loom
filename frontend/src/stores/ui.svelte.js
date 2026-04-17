@@ -19,6 +19,9 @@ export const ui = $state({
     trainInfoOpen: false,
     aboutOpen: false,
     settingsOpen: false,
+    stylePageOpen: false,
+    loadResultsOpen: false,
+    loadResultsData: null,
     headerLocked: !isLoggedIn(),
 });
 
@@ -39,6 +42,9 @@ export function setVizOpen(value) {
     try { sessionStorage.setItem('loom_viz_open', value ? 'true' : 'false'); } catch {}
 }
 export function setTrainInfoOpen(value) { ui.trainInfoOpen = value; }
-export function setAboutOpen(value) { ui.aboutOpen = value; if (value) ui.settingsOpen = false; }
-export function setSettingsOpen(value) { ui.settingsOpen = value; if (value) ui.aboutOpen = false; }
+export function setAboutOpen(value) { ui.aboutOpen = value; if (value) { ui.settingsOpen = false; ui.stylePageOpen = false; } }
+export function setSettingsOpen(value) { ui.settingsOpen = value; if (value) { ui.aboutOpen = false; ui.stylePageOpen = false; } }
+export function setStylePageOpen(value) { ui.stylePageOpen = value; if (value) { ui.aboutOpen = false; ui.settingsOpen = false; ui.loadResultsOpen = false; } }
+export function showLoadResults(data) { ui.loadResultsData = data; ui.loadResultsOpen = true; ui.aboutOpen = false; ui.settingsOpen = false; ui.stylePageOpen = false; }
+export function closeLoadResults() { ui.loadResultsOpen = false; ui.loadResultsData = null; }
 export function setHeaderLocked(value) { ui.headerLocked = value; }

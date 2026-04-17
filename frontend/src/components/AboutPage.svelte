@@ -1,6 +1,5 @@
 <script>
     import { setAboutOpen } from '../stores/ui.svelte.js';
-
     function close() {
         setAboutOpen(false);
     }
@@ -111,6 +110,7 @@
                 </div>
             </div>
         </section>
+
     </div>
 </div>
 
@@ -260,6 +260,85 @@
         font-size: 0.8125rem;
         color: var(--text-muted);
         line-height: 1.5;
+    }
+
+    .style-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.625rem;
+        margin: 0.875rem 0;
+    }
+
+    .stat-box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 0.875rem 0.5rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        text-align: center;
+    }
+
+    .stat-value {
+        font-size: 1.375rem;
+        font-weight: 700;
+        color: var(--accent-hover);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .stat-label {
+        font-size: 0.6875rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 0.25rem;
+    }
+
+    .patterns-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        margin-top: 1rem;
+    }
+
+    .patterns-title {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.375rem;
+    }
+
+    .pattern-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.375rem 0.625rem;
+        background: var(--bg-secondary);
+        border-radius: 6px;
+    }
+
+    .pattern-label {
+        font-size: 0.8125rem;
+        color: var(--accent-hover);
+        background: transparent;
+        padding: 0;
+    }
+
+    .pattern-feedback {
+        display: inline-flex;
+        gap: 0.5rem;
+        font-size: 0.75rem;
+    }
+
+    .like-count { color: var(--success); }
+    .dislike-count { color: var(--error); }
+    .neutral { color: var(--text-muted); font-style: italic; }
+
+    .pattern-count {
+        font-size: 0.75rem;
+        color: var(--text-muted);
     }
 
     @keyframes fadeIn {

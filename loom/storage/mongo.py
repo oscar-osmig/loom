@@ -577,11 +577,21 @@ class MongoStorage:
     # ==================== ADMIN ====================
 
     def forget_all(self):
-        """Clear all data for this instance."""
-        self.db.facts.delete_many({"instance": self.instance_name})
-        self.db.procedures.delete_many({"instance": self.instance_name})
-        self.db.inferences.delete_many({"instance": self.instance_name})
-        self.db.conflicts.delete_many({"instance": self.instance_name})
+        """Clear ALL data for this instance — every collection."""
+        inst = {"instance": self.instance_name}
+        self.db.facts.delete_many(inst)
+        self.db.procedures.delete_many(inst)
+        self.db.inferences.delete_many(inst)
+        self.db.conflicts.delete_many(inst)
+        self.db.style_patterns.delete_many(inst)
+        self.db.feedback.delete_many(inst)
+        # Clear any other collections that might exist
+        for coll_name in self.db.list_collection_names():
+            if coll_name not in ('system.indexes',):
+                try:
+                    self.db[coll_name].delete_many(inst)
+                except Exception:
+                    pass
 
     def get_stats(self) -> dict:
         """Get storage statistics."""

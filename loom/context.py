@@ -56,7 +56,13 @@ class ConversationContext:
     Enables pronoun resolution, topic continuity, and contextual understanding.
     """
 
-    def __init__(self, history_size: int = 10):
+    def __init__(self, history_size: int = 10, conversation_id: str = None):
+        # Conversation identifier (for per-user context isolation)
+        self.conversation_id = conversation_id
+        import time as _time
+        self.created_at = _time.time()
+        self.last_active = _time.time()
+
         # Current topic being discussed
         self.current_topic = None
 

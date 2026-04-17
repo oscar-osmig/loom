@@ -1,6 +1,12 @@
-# Loom v0.6
+# Loom v0.8-dev
 
 **A symbolic knowledge system that learns through natural language dialogue.**
+
+> **What's new since v0.6:** Response composer with varied natural-language generation,
+> recursive descent grammar parser for complex sentences, pandas batch loading (2,281 facts/sec),
+> pydantic schemas, style learner with feedback loop, Svelte 5 frontend with visualizer,
+> file management, per-user settings. See [WHERE_WE_LEFT_OFF.md](./WHERE_WE_LEFT_OFF.md) for
+> full status and roadmap.
 
 Loom is a transparent, explainable cognition engine. It stores knowledge as a directed graph of *neurons* (concepts) and *synapses* (connections), reasons over that graph with explicit symbolic primitives, and explains every conclusion it draws back to the facts that produced it.
 

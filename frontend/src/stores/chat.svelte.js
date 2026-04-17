@@ -3,6 +3,40 @@
  */
 
 const STORAGE_KEY = 'loom_chat_history';
+const CONV_ID_KEY = 'loom_conversation_id';
+
+function generateUUID() {
+    // Browser-native UUID when available, fallback otherwise
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function loadConversationId() {
+    try {
+        let id = sessionStorage.getItem(CONV_ID_KEY);
+        if (!id) {
+            id = generateUUID();
+            sessionStorage.setItem(CONV_ID_KEY, id);
+        }
+        return id;
+    } catch {
+        return generateUUID();
+    }
+}
+
+export const conversationId = loadConversationId();
+
+export function resetConversation() {
+    const newId = generateUUID();
+    try { sessionStorage.setItem(CONV_ID_KEY, newId); } catch {}
+    return newId;
+}
 
 function loadMessages() {
     try {

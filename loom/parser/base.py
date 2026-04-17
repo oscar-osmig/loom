@@ -180,21 +180,27 @@ class Parser:
         return None
 
     def _is_question(self, t: str) -> bool:
-        """Check if text is a question (should not be stored as fact)."""
+        """Check if text is a question or query request (should not be stored as fact)."""
         question_starters = [
             "what", "where", "who", "when", "why", "how", "which",
             "can", "could", "does", "do", "is", "are", "was", "were",
             "will", "would", "should", "have", "has", "did", "in"
         ]
         first_word = t.split()[0] if t.split() else ""
-        # Check for "?" or question starter words
         if "?" in t:
             return True
         if first_word in question_starters:
             return True
-        # Check for "in what" style questions
         if t.startswith("in what") or t.startswith("in which"):
             return True
+        # Query-like imperatives
+        query_imperatives = [
+            "tell me", "describe ", "explain ", "show me",
+            "what do you know", "list ",
+        ]
+        for qi in query_imperatives:
+            if t.startswith(qi):
+                return True
         return False
 
     def _maybe_ask_clarification(self, t: str) -> str:
@@ -419,6 +425,13 @@ class Parser:
         original = text
         t = text.lower().strip().rstrip("?.")
 
+        # Observe user input for style learning (only for statements, not questions)
+        if not self._is_question(t) and hasattr(self.loom, 'style_learner'):
+            try:
+                self.loom.style_learner.observe(text)
+            except Exception:
+                pass
+
         # Detect and set context for this input (used by add_fact)
         ctx, props = self._detect_context_and_properties(original)
         self.loom._input_context = ctx
@@ -589,6 +602,7 @@ class Parser:
             self._check_analogy_pattern,
             self._check_same_as_pattern,
             self._check_list_learning,       # "X, Y, and Z are W" -> multiple relations - BEFORE is_statement!
+            self._check_grammar_parser,      # Recursive descent parser for complex sentences
             self._check_relation_patterns,
             self._check_conditional_pattern,
             self._check_becomes_pattern,
@@ -876,12 +890,39 @@ class Parser:
         return _check_differ_query(self, t)
 
     def _check_describe_query(self, t: str) -> str | None:
-        """Handle 'tell me about X', 'describe X', 'what do you know about X'."""
+        """Handle 'tell me about X', 'describe X', 'what do you know about X'.
+        Also handles 'tell me more' (continuation on current topic) and
+        'tell me more about X'."""
         import re
         from ..composer import gather_facts, compose_response
+
+        # Continuation: "tell me more" with no explicit subject → use current topic
+        continuation = re.match(
+            r"(?:tell\s+me\s+more|more\s+(?:please|info|details)?|continue|go\s+on|keep\s+going)\s*$",
+            t, re.IGNORECASE
+        )
+        if continuation:
+            topic = self.loom.context.current_topic or self.loom.context.last_subject or self.last_subject
+            if topic:
+                try:
+                    facts = gather_facts(self.loom, topic)
+                    if facts["direct"] or facts["inherited"]:
+                        result = compose_response(self.loom, "describe", topic, facts=facts)
+                        if result:
+                            self.last_subject = topic
+                            self.loom.context.update(subject=topic, relation="is", obj=None)
+                            return result
+                except Exception:
+                    pass
+                return f"I'd tell you more about {topic.replace('_', ' ')}, but I don't have additional details yet."
+            return "What would you like to know more about?"
+
         match = re.match(
-            r"(?:tell\s+me\s+(?:more\s+)?about|describe|what\s+do\s+you\s+know\s+about"
-            r"|what\s+about|explain)\s+(.+)",
+            r"(?:tell\s+me\s+(?:more\s+)?(?:about|facts\s+(?:about|on))"
+            r"|tell\s+me\s+(?:everything|all)\s+(?:about|on)"
+            r"|describe|what\s+do\s+you\s+know\s+about"
+            r"|what\s+about|explain|show\s+me\s+(?:about)?"
+            r"|tell\s+me\s+about)\s+(.+)",
             t, re.IGNORECASE
         )
         if not match:
@@ -896,6 +937,10 @@ class Parser:
             if facts["direct"] or facts["inherited"]:
                 result = compose_response(self.loom, "describe", concept, facts=facts)
                 if result:
+                    # Update context so follow-up pronouns resolve correctly
+                    resolved = facts.get("concept") or concept
+                    self.last_subject = resolved
+                    self.loom.context.update(subject=resolved, relation="is", obj=None)
                     return result
         except Exception:
             pass
@@ -923,6 +968,55 @@ class Parser:
         subj, verb, obj = match.group(1).strip(), match.group(2).strip(), match.group(3).strip().rstrip("?.")
         try:
             return compose_response(self.loom, "why", subj, relation=verb, target=obj)
+        except Exception:
+            pass
+        return None
+
+    def _check_grammar_parser(self, t: str) -> str | None:
+        """
+        Try the recursive descent grammar parser for complex sentences
+        with relative clauses, conjunctions, etc. Returns None if the
+        parser can't handle it (falls through to regex handlers).
+        """
+        # Only attempt if sentence has structural complexity
+        has_relative = bool(re.search(r"\b(that|which|who)\s+(have|has|can|is|are|was|were|eat|live)", t))
+        has_multiple_clauses = t.count(",") >= 2 or " and " in t
+        if not (has_relative or has_multiple_clauses):
+            return None
+        if self._is_question(t):
+            return None
+
+        try:
+            from ..grammar_parser import parse_and_extract
+            facts = parse_and_extract(t)
+            if not facts or len(facts) < 2:
+                return None  # Didn't parse well enough; let regex try
+
+            added = 0
+            for fact in facts:
+                s = fact.subject.strip()
+                r = fact.relation.strip()
+                o = fact.obj.strip()
+                if not s or not r or not o:
+                    continue
+                if len(s) > 50 or len(o) > 50:
+                    continue
+                try:
+                    existing = self.loom.get(s, r) or []
+                    if o.lower() not in [e.lower() for e in existing]:
+                        self.loom.add_fact(s, r, o)
+                        added += 1
+                except Exception:
+                    pass
+
+            if added > 0:
+                self.last_subject = facts[0].subject
+                self.loom.context.update(
+                    subject=facts[0].subject,
+                    relation=facts[0].relation,
+                    obj=facts[0].obj,
+                )
+                return f"Got it — parsed {added} fact{'s' if added != 1 else ''} from that sentence."
         except Exception:
             pass
         return None

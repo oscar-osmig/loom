@@ -17,6 +17,33 @@ from .normalizer import normalize
 if TYPE_CHECKING:
     from .brain import Loom
 
+
+def _pick_template(loom: Optional["Loom"], seed: int, templates: list, labels: list = None):
+    """
+    Pick a template from a list, factoring in style feedback scores.
+    Templates with negative feedback are demoted, positive are boosted.
+    """
+    if not templates:
+        return ""
+    if not loom or not hasattr(loom, "style_learner") or not labels:
+        return templates[seed % len(templates)]
+
+    # Score each template by its feedback
+    try:
+        scored = []
+        for i, tmpl in enumerate(templates):
+            label = labels[i] if i < len(labels) else None
+            base_score = seed % 100 / 100.0  # Deterministic baseline from seed
+            feedback = loom.style_learner.get_template_score(label) if label else 0.0
+            # Feedback in [-1, +1] — shift preference but don't override determinism entirely
+            adjusted = base_score + feedback * 0.5
+            scored.append((adjusted, i, tmpl))
+        scored.sort(reverse=True)
+        # Pick highest-scored, but use seed-based variance for ties
+        return scored[0][2]
+    except Exception:
+        return templates[seed % len(templates)]
+
 # ── Relation groupings for natural ordering ───────────────────────────
 
 IDENTITY_RELS = {"is", "is_a", "type_of", "kind_of"}
@@ -119,6 +146,7 @@ def gather_facts(loom: "Loom", concept: str, depth: int = 2) -> dict:
         "parents": [],
         "children": [],
         "confidence": {},
+        "_loom": loom,  # reference for composer to access style_learner
     }
 
     # Direct facts (concept as subject)
@@ -499,6 +527,9 @@ def _compose_describe(subj: str, facts: dict) -> str:
     # Build sentences (not parts) — each is a complete thought
     sentences = []
 
+    # Try to find the Loom instance for style-aware template selection
+    _loom = facts.get("_loom")
+
     # ── Opening sentence: identity ──
     if categories:
         cats = _format_list([_pretty(c) for c in categories[:3]])
@@ -508,7 +539,8 @@ def _compose_describe(subj: str, facts: dict) -> str:
             f"{S} is a kind of {cats}.",
             f"{S} falls under {cats}.",
         ]
-        sentences.append(openers[seed % len(openers)])
+        labels = ["is", "is_classified_as", "is_a_kind_of", "falls_under"]
+        sentences.append(_pick_template(_loom, seed, openers, labels))
     elif children:
         # Category with no parents — lead with what it contains
         child_list = _format_list(children[:5])
@@ -518,7 +550,8 @@ def _compose_describe(subj: str, facts: dict) -> str:
             f"Some well-known {subj}s include {child_list}.",
             f"{S} encompasses things like {child_list}.",
         ]
-        sentences.append(openers[seed % len(openers)])
+        labels = ["broad_category", "types_of", "well_known", "encompasses"]
+        sentences.append(_pick_template(_loom, seed, openers, labels))
         children = []  # Don't repeat below
 
     # ── Properties ──

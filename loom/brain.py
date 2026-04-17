@@ -34,6 +34,7 @@ from .frames import FrameManager
 from .curiosity import QuestionGenerator, CuriosityNodeManager
 from .speech import SpeechProcessor, ASRBackend
 from .rules import RuleMemory, RuleEngine, Rule, RuleStatus
+from .style_learner import StyleLearner
 
 # Confidence levels
 CONFIDENCE_HIGH = "high"      # Directly stated by user
@@ -130,8 +131,12 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         self._speech_processor = None
         self._current_speech_provenance = None
 
-        # Conversation context
-        self.context = ConversationContext()
+        # Conversation context pool — one ConversationContext per conversation_id
+        # Default context used when no conversation_id is set
+        self._context_pool: Dict[str, ConversationContext] = {}
+        self._default_context = ConversationContext(conversation_id="_default")
+        self._current_conversation_id: str = "_default"
+        self._context_pool["_default"] = self._default_context
 
         # Spreading activation network (Collins & Loftus model)
         # Increased priming window (30s) and slower decay for better concept retention
@@ -183,6 +188,9 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Frame-based knowledge layer for attribute slots and emergent categorization
         self.frame_manager = FrameManager(self)
         self.frame_manager.hydrate_from_knowledge()
+
+        # Style learner: extracts writing patterns from user input + feedback
+        self.style_learner = StyleLearner(self)
 
     def _init_loom_knowledge(self):
         """Initialize default knowledge about Loom itself."""
@@ -246,6 +254,43 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
     def _invalidate_cache(self):
         """Mark cache as needing refresh."""
         self._cache_dirty = True
+
+    # ── Per-conversation context pool ──────────────────────────────────
+
+    @property
+    def context(self) -> "ConversationContext":
+        """Return the context for the current conversation."""
+        return self._context_pool[self._current_conversation_id]
+
+    @context.setter
+    def context(self, value: "ConversationContext"):
+        """Assign a context directly (used for backward compat)."""
+        self._context_pool[self._current_conversation_id] = value
+
+    def set_conversation(self, conversation_id: str) -> None:
+        """
+        Switch to a specific conversation's context.
+        Creates a new ConversationContext if this conversation is new.
+        Also evicts old contexts (older than 2 hours of inactivity).
+        """
+        import time
+        if not conversation_id:
+            conversation_id = "_default"
+        if conversation_id not in self._context_pool:
+            ctx = ConversationContext(conversation_id=conversation_id)
+            ctx.set_knowledge_ref(self.knowledge)
+            self._context_pool[conversation_id] = ctx
+        self._context_pool[conversation_id].last_active = time.time()
+        self._current_conversation_id = conversation_id
+
+        # Opportunistic eviction: drop contexts idle > 2 hours, keep default
+        now = time.time()
+        stale_cutoff = now - 2 * 3600
+        for cid in list(self._context_pool.keys()):
+            if cid == "_default" or cid == conversation_id:
+                continue
+            if self._context_pool[cid].last_active < stale_cutoff:
+                del self._context_pool[cid]
 
     def _is_valid_entity(self, name: str) -> bool:
         """Check if an entity name is valid (not polluted/malformed)."""
@@ -1166,10 +1211,16 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if hasattr(self, 'connection_weights'):
             self.connection_weights.clear()
             self.connection_times.clear()
-        if hasattr(self, 'curiosity_node_manager'):
-            self.curiosity_node_manager = CuriosityNodeManager(self)
-        if hasattr(self, 'question_generator'):
-            self.question_generator = QuestionGenerator(self)
+        if hasattr(self, 'curiosity_nodes'):
+            self.curiosity_nodes = CuriosityNodeManager(self)
+        if hasattr(self, 'curiosity'):
+            self.curiosity = QuestionGenerator(self)
+        if hasattr(self, 'rule_memory'):
+            self.rule_memory._rules.clear()
+            self.rule_memory._pattern_counts.clear()
+            self.rule_memory._rule_counter = 0
+        if hasattr(self, 'style_learner'):
+            self.style_learner._cache_templates = None
         # Re-add loom self-knowledge only
         self._init_loom_knowledge()
 

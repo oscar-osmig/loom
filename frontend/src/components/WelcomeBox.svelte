@@ -1,18 +1,40 @@
 <script>
     import { isAuthenticated } from '../stores/auth.svelte.js';
+    import { auth } from '../stores/auth.svelte.js';
 
-    const tips = [
+    // Tips everyone sees
+    const userTips = [
         'Teach me facts like <b>"dogs are animals"</b>',
         'Ask questions like <b>"what are dogs?"</b>',
         'Paste a paragraph and I\'ll extract knowledge from it',
-        'Type <b>/help</b> to see all available commands',
-        'Try <b>/show</b> to see the knowledge summary',
-        'Use <b>/neuron X</b> to inspect any concept',
+        'Type <b>/help</b> to see available commands',
+        'Say <b>"tell me about X"</b> for a full description',
         'Click the <b>?</b> in the header to learn more about Loom',
         'Type <b>"birds can fly"</b> to teach abilities',
-        'Try <b>/analogies X</b> to find similar concepts',
-        'Click <b>Visualize</b> to see the knowledge graph',
+        'Try <b>/visualize</b> to see the neural graph',
+        'Type <b>/about</b> to learn how Loom works',
+        'Ask <b>"where do fish live?"</b> to query locations',
+        'Rate responses with 👍/👎 to help Loom improve',
     ];
+
+    // Extra tips only admins see (mixed in)
+    const adminTips = [
+        'Use <b>/load-all</b> to load all training files at once',
+        'Try <b>/stats</b> to see storage statistics',
+        'Use <b>/style</b> to see writing style analytics',
+        'Try <b>/neuron X</b> to inspect any concept',
+        'Use <b>/show</b> to view the full knowledge summary',
+        'Drag & drop <b>.json</b> or <b>.txt</b> files to train Loom',
+        'Try <b>/analogies X</b> to find similar concepts',
+        'Use <b>/forget-all</b> to reset all knowledge',
+    ];
+
+    // Check admin via email match (simplified client-side check)
+    const isAdmin = $derived(!!auth.email);
+
+    const tips = $derived(
+        isAdmin ? [...userTips, ...adminTips] : userTips
+    );
 
     let tipIndex = $state(0);
     let visible = $state(true);

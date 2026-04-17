@@ -1,6 +1,6 @@
 <script>
     import { auth } from '../stores/auth.svelte.js';
-    import { addMessage } from '../stores/chat.svelte.js';
+    import { addMessage, conversationId } from '../stores/chat.svelte.js';
     import { ui, showInfoPanel, setVizOpen, setTrainInfoOpen, setAboutOpen } from '../stores/ui.svelte.js';
     import { showSpinner, hideSpinner } from '../stores/training.svelte.js';
     import { showToast } from '../stores/toast.svelte.js';
@@ -13,7 +13,7 @@
     async function handleStats() {
         if (ui.headerLocked) return;
         try {
-            const data = await sendChat('/stats', auth.user, auth.email);
+            const data = await sendChat('/stats', auth.user, auth.email, conversationId);
             if (data.error) {
                 addMessage(data.error, 'error');
             } else {

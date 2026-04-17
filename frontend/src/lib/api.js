@@ -24,12 +24,12 @@ export async function fetchConfig() {
  * @param {string} email
  * @returns {{ response: string, type: string, meta?: object } | { error: string }}
  */
-export async function sendChat(message, user, email) {
+export async function sendChat(message, user, email, conversationId) {
     try {
         const res = await fetch(`${BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, user, email })
+            body: JSON.stringify({ message, user, email, conversation_id: conversationId })
         });
         return await res.json();
     } catch (err) {
@@ -72,6 +72,36 @@ export async function uploadTrainingBatch(files, user) {
         return await res.json();
     } catch (err) {
         return { error: err.message || 'Failed to upload training files' };
+    }
+}
+
+/**
+ * GET /api/style
+ * Returns what Loom has learned about writing style.
+ */
+export async function fetchStyle(email) {
+    try {
+        const res = await fetch(`${BASE}/api/style?email=${encodeURIComponent(email || '')}`);
+        return await res.json();
+    } catch (err) {
+        return { error: err.message };
+    }
+}
+
+/**
+ * POST /api/feedback
+ * Records a like/dislike on an assistant response.
+ */
+export async function sendFeedback(payload) {
+    try {
+        const res = await fetch(`${BASE}/api/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return await res.json();
+    } catch (err) {
+        return { error: err.message };
     }
 }
 

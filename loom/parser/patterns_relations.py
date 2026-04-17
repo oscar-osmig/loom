@@ -84,9 +84,43 @@ def _check_relation_patterns(parser, t: str) -> str | None:
             else:
                 return None  # Copula — let _check_is_statement handle it
 
-    # Handle modal verbs: "X can/could/will Y" → store as (X, can, Y)
-    # These are auxiliaries that Loom uses as relations, not content verbs.
+    # Handle compound verb phrases that map to specific relations BEFORE generic modals
     import re as _re
+
+    # "X can be found in Y" / "X is found in Y" / "X are found in Y" → found_in
+    found_in_match = _re.match(
+        r"^(.+?)\s+(?:can\s+be|is|are)\s+found\s+in\s+(.+)$", t
+    )
+    if found_in_match:
+        subj = _clean_subject(found_in_match.group(1))
+        locations = found_in_match.group(2)
+        if subj and locations:
+            # Split "lakes and rivers" into individual locations
+            for loc in _re.split(r",\s*(?:and\s+)?|\s+and\s+", locations):
+                loc = _clean_object(loc.strip())
+                if loc:
+                    parser.loom.add_fact(subj, "found_in", loc)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation="found_in", obj=locations)
+            return f"Got it, {subj} can be found in {locations}."
+
+    # "X lives in Y" / "X live in Y" → lives_in
+    lives_in_match = _re.match(
+        r"^(.+?)\s+lives?\s+in\s+(.+)$", t
+    )
+    if lives_in_match:
+        subj = _clean_subject(lives_in_match.group(1))
+        locations = lives_in_match.group(2)
+        if subj and locations:
+            for loc in _re.split(r",\s*(?:and\s+)?|\s+and\s+", locations):
+                loc = _clean_object(loc.strip())
+                if loc:
+                    parser.loom.add_fact(subj, "lives_in", loc)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation="lives_in", obj=locations)
+            return f"Got it, {subj} lives in {locations}."
+
+    # Handle modal verbs: "X can/could/will Y" → store as (X, can, Y)
     modal_match = _re.match(r"^(.+?)\s+(can|could|cannot|can't|will|would|should|must)\s+(.+)$", t)
     if modal_match:
         subj = _clean_subject(modal_match.group(1))

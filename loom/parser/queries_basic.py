@@ -81,13 +81,14 @@ def _check_color_query(parser, t: str) -> str | None:
 
 
 def _check_where_query(parser, t: str) -> str | None:
-    """Handle 'where is X?' or 'where do X live?' queries."""
+    """Handle 'where is X?' or 'where do X live?' or 'where can X be found?' queries."""
     if not t.startswith("where"):
+        # Also handle "X can be found where?" style but that's rare
         return None
 
-    # Extract subject
-    subj = re.sub(r"where (is|are|do|does|can|did)?\s*", "", t).strip()
-    subj = re.sub(r"\s*(live|located|found|stay|run|runs).*", "", subj).strip()
+    # Extract subject — strip common question patterns
+    subj = re.sub(r"where (is|are|do|does|can|did|would)?\s*", "", t).strip()
+    subj = re.sub(r"\s*(live|lives|located|found|be found|stay|run|runs).*", "", subj).strip()
 
     if not subj:
         return None

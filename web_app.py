@@ -182,9 +182,16 @@ def chat():
     message = data.get('message', '').strip()
     user = data.get('user', '').strip()
     email = data.get('email', '').strip()
+    conversation_id = data.get('conversation_id', '').strip()
 
     if not message:
         return jsonify({'response': 'Please enter a message.', 'type': 'error'})
+
+    # Switch to this conversation's context (isolates multi-user state)
+    if conversation_id:
+        loom.set_conversation(conversation_id)
+    else:
+        loom.set_conversation("_default")
 
     # Tag all facts with the current user
     if user:
@@ -196,6 +203,17 @@ def chat():
 
         if cmd == 'help':
             return jsonify({'response': get_help_text(admin=is_admin(email)), 'type': 'help'})
+
+        elif cmd == 'style':
+            if not is_admin(email):
+                return jsonify({'response': 'Permission denied. Only admins can view style data.', 'type': 'error'})
+            return jsonify({'response': 'open_style_page', 'type': 'style'})
+
+        elif cmd == 'visualize' or cmd == 'viz' or cmd == 'graph':
+            return jsonify({'response': 'open_visualizer', 'type': 'visualize'})
+
+        elif cmd == 'about':
+            return jsonify({'response': 'open_about', 'type': 'about'})
 
         elif cmd == 'show':
             return jsonify({'response': get_knowledge_summary(), 'type': 'info'})
@@ -221,6 +239,37 @@ def chat():
                 return jsonify({'response': f'Erased {count} of your facts.', 'type': 'info'})
             else:
                 return jsonify({'response': 'No user identified. Sign in first.', 'type': 'error'})
+
+        elif cmd == 'load-all':
+            if not is_admin(email):
+                return jsonify({'response': 'Permission denied. Only admins can load all training files.', 'type': 'error'})
+            import glob
+            training_dir = os.path.join(os.path.dirname(__file__), 'training')
+            files = sorted(glob.glob(os.path.join(training_dir, '*.json')) + glob.glob(os.path.join(training_dir, '*.txt')))
+            if not files:
+                return jsonify({'response': 'No training files found in training/ folder.', 'type': 'error'})
+            total_loaded = 0
+            results = []
+            for filepath in files:
+                fname = os.path.basename(filepath)
+                try:
+                    count, msg = loom.train_from_file(filepath) if hasattr(loom, 'train_from_file') else (0, 'N/A')
+                    if count == 0:
+                        from loom.trainer import train_from_file
+                        count, msg = train_from_file(loom, filepath)
+                    total_loaded += count
+                    results.append({"name": fname, "count": count, "ok": True})
+                except Exception as e:
+                    results.append({"name": fname, "count": 0, "ok": False, "error": str(e)[:80]})
+            return jsonify({
+                'response': 'open_load_results',
+                'type': 'load_results',
+                'meta': {
+                    'total_loaded': total_loaded,
+                    'total_files': len(files),
+                    'files': results,
+                }
+            })
 
         elif cmd == 'about':
             return jsonify({'response': get_about_text(), 'type': 'info'})
@@ -349,7 +398,7 @@ Unlike statistical or vector-based AI, Loom relies on explicit symbolic represen
 
 
 def get_help_text(admin=False):
-    """Return help text, filtering admin commands for non-admins."""
+    """Return help text, filtering commands by role."""
     text = """<b>How Loom Works</b>
 Loom learns by creating neurons (concepts) and synapses (connections) from your statements.
 
@@ -362,10 +411,23 @@ Loom learns by creating neurons (concepts) and synapses (connections) from your 
 <b>Asking</b>
 • "what are dogs?" - categories
 • "can birds fly?" - abilities
+• "tell me about X" - full description
+• "where do X live?" - locations
 
 <b>Commands</b> (require / prefix)
 • /about - what is Loom?
+• /help - show this help
+• /visualize - open the neural graph
+• /clear - clear chat history
+• /forget - erase your own facts"""
+
+    if admin:
+        text += """
+
+<b>Admin Commands</b>
 • /show - view knowledge summary
+• /stats - storage statistics
+• /style - writing style analytics
 • /neuron X - inspect concept X
 • /frame X - show concept frame
 • /bridges [X] - show attribute bridges
@@ -373,15 +435,10 @@ Loom learns by creating neurons (concepts) and synapses (connections) from your 
 • /activation - show activation state
 • /weights - show strong connections
 • /analogies X - find similar concepts
-• /stats - storage statistics
-• /clear - clear chat history
-• /forget - erase your own facts
-• /help - show this help"""
-
-    if admin:
-        text += "\n• /forget-all - erase all memory (admin)"
-        text += "\n• /train [pack] - load training pack (admin)"
-        text += "\n• /load [file] - load from file (admin)"
+• /forget-all - erase all memory
+• /train [pack] - load training pack
+• /load [file] - load from file
+• /load-all - load all files from training/"""
 
     return text
 
@@ -575,6 +632,72 @@ def check_nickname():
     except Exception:
         # Fallback: allow it if we can't check
         return jsonify({'available': True})
+
+
+@app.route('/api/style', methods=['GET'])
+def get_style():
+    """Return what Loom has learned about writing style. Admin only."""
+    email = request.args.get('email', '')
+    if not is_admin(email):
+        return jsonify({'error': 'Admin access required'}), 403
+    if not hasattr(loom, 'style_learner'):
+        return jsonify({'stats': {}, 'patterns': []})
+
+    stats = loom.style_learner.get_stats()
+
+    # Top patterns per kind
+    patterns = {
+        'openers': [
+            {'value': v, 'score': s, 'likes': doc.get('likes', 0), 'dislikes': doc.get('dislikes', 0), 'count': doc.get('count', 0)}
+            for v, s, doc in loom.style_learner.get_top_patterns('opener', limit=5)
+        ],
+        'connectives': [
+            {'value': v, 'score': s, 'likes': doc.get('likes', 0), 'dislikes': doc.get('dislikes', 0), 'count': doc.get('count', 0)}
+            for v, s, doc in loom.style_learner.get_top_patterns('connective', limit=5)
+        ],
+        'templates': [
+            {'value': v, 'score': s, 'likes': doc.get('likes', 0), 'dislikes': doc.get('dislikes', 0), 'count': doc.get('count', 0)}
+            for v, s, doc in loom.style_learner.get_top_patterns('template', limit=5)
+        ],
+        'composer_templates': [
+            {'value': v, 'score': s, 'likes': doc.get('likes', 0), 'dislikes': doc.get('dislikes', 0), 'count': doc.get('count', 0)}
+            for v, s, doc in loom.style_learner.get_top_patterns('composer_template', limit=10)
+        ],
+    }
+
+    return jsonify({'stats': stats, 'patterns': patterns})
+
+
+@app.route('/api/feedback', methods=['POST'])
+def record_feedback():
+    """Record user feedback on an assistant response (for style learning)."""
+    from datetime import datetime, timezone
+    data = request.json or {}
+    rating = data.get('rating')
+    if rating not in ('like', 'dislike'):
+        return jsonify({'error': 'Invalid rating'}), 400
+
+    doc = {
+        'instance': loom.storage.instance_name,
+        'message_id': data.get('message_id'),
+        'rating': rating,
+        'user': data.get('user', ''),
+        'input_text': (data.get('input_text') or '')[:500],
+        'response_text': (data.get('response_text') or '')[:1000],
+        'created_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        loom.storage.db.feedback.insert_one(doc)
+        # Feed into style learner if available
+        if hasattr(loom, 'style_learner'):
+            loom.style_learner.record(
+                input_text=doc['input_text'],
+                response_text=doc['response_text'],
+                rating=rating,
+            )
+    except Exception:
+        pass
+    return jsonify({'ok': True})
 
 
 @app.route('/api/questions', methods=['GET'])

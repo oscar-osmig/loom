@@ -1,7 +1,7 @@
 <script>
     import { auth, isAuthenticated, setUser } from '../stores/auth.svelte.js';
-    import { addMessage, setTyping } from '../stores/chat.svelte.js';
-    import { showInfoPanel, setHeaderLocked } from '../stores/ui.svelte.js';
+    import { addMessage, setTyping, conversationId } from '../stores/chat.svelte.js';
+    import { showInfoPanel, setHeaderLocked, setStylePageOpen, setVizOpen, setAboutOpen, showLoadResults } from '../stores/ui.svelte.js';
     import { showSpinner, hideSpinner } from '../stores/training.svelte.js';
     import { showToast } from '../stores/toast.svelte.js';
     import { sendChat, uploadTrainingBatch } from '../lib/api.js';
@@ -93,7 +93,7 @@
         sending = true;
 
         try {
-            const data = await sendChat(message, auth.user, auth.email);
+            const data = await sendChat(message, auth.user, auth.email, conversationId);
 
             setTyping(false);
             sending = false;
@@ -109,10 +109,18 @@
 
             const responseType = data.type || 'response';
 
-            // Route help and info to the info panel
+            // Route help and info to the info panel, style to style page
             if (responseType === 'help' || responseType === 'info') {
                 const title = responseType === 'help' ? 'Help' : 'Info';
                 showInfoPanel(title, data.response);
+            } else if (responseType === 'style') {
+                setStylePageOpen(true);
+            } else if (responseType === 'visualize') {
+                setVizOpen(true);
+            } else if (responseType === 'about') {
+                setAboutOpen(true);
+            } else if (responseType === 'load_results') {
+                showLoadResults(data.meta);
             } else {
                 addMessage(data.response, responseType, data.meta);
             }

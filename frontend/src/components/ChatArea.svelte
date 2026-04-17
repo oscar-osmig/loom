@@ -7,6 +7,8 @@
     import WelcomeBox from './WelcomeBox.svelte';
     import AboutPage from './AboutPage.svelte';
     import SettingsPage from './SettingsPage.svelte';
+    import StylePage from './StylePage.svelte';
+    import LoadResultsPage from './LoadResultsPage.svelte';
     import FileViewer from './FileViewer.svelte';
     import FileSidebar from './FileSidebar.svelte';
     import TypingIndicator from './TypingIndicator.svelte';
@@ -56,6 +58,10 @@
             <AboutPage />
         {:else if ui.settingsOpen}
             <SettingsPage />
+        {:else if ui.stylePageOpen}
+            <StylePage />
+        {:else if ui.loadResultsOpen}
+            <LoadResultsPage />
         {:else if fileStore.activeFile}
             <FileViewer />
         {:else}
@@ -72,8 +78,14 @@
                     <WelcomeBox />
                 {/if}
 
-                {#each chat.messages as msg (msg.id)}
-                    <MessageBubble content={msg.content} type={msg.type} meta={msg.meta} />
+                {#each chat.messages as msg, i (msg.id)}
+                    <MessageBubble
+                        id={msg.id}
+                        content={msg.content}
+                        type={msg.type}
+                        meta={msg.meta}
+                        userInput={i > 0 && chat.messages[i-1].type === 'user' ? chat.messages[i-1].content : ''}
+                    />
                 {/each}
 
                 <TypingIndicator />
