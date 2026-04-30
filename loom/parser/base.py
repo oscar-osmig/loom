@@ -41,6 +41,7 @@ class Parser:
         self._current_context = None  # Context for current input
         self._current_properties = None  # Properties for current input
         self._structural_result = None  # Current structural extraction result
+        self._current_entity_type = None  # Entity type for current input (self/system/third_party)
 
     def _detect_context_and_properties(self, text: str) -> tuple:
         """
@@ -57,10 +58,40 @@ class Parser:
         }
         return ctx, props
 
+    def _preprocess_entity_references(self, text: str) -> str:
+        """
+        Preprocess entity references in text before parsing.
+
+        This method detects entity types (self/system/third-party) in the
+        input and stores them in context for downstream handlers. It does
+        NOT rewrite first-person text because the dedicated
+        _check_first_person_statement handler already maps I/my to 'user'
+        with custom response phrasing.
+
+        It does flag the input so context tracking knows who is being
+        discussed (user vs Loom vs a third-party entity).
+        """
+        from ..context import detect_entity_type, ENTITY_SELF, ENTITY_SYSTEM
+
+        # Detect entity type of the first significant word for context tracking
+        words = text.split()
+        if words:
+            first_word = words[0].strip(",.!?")
+            etype = detect_entity_type(first_word)
+            # Store the detected entity type so handlers can use it
+            self._current_entity_type = etype
+        else:
+            self._current_entity_type = None
+
+        return text
+
     def add_fact_with_context(self, subject: str, relation: str, obj: str,
                                text: str = None, confidence: str = None):
         """
         Add a fact with automatically detected context and properties.
+
+        In hypothetical mode, facts are tracked in context but NOT persisted
+        to the brain/storage.
 
         Args:
             subject: The subject of the fact
@@ -69,6 +100,16 @@ class Parser:
             text: Original text for context detection (optional)
             confidence: Confidence level (optional)
         """
+        # In hypothetical mode, track but don't persist
+        if self.loom.context.hypothetical_mode:
+            self.loom.context.hypothetical_facts.append({
+                "subject": subject,
+                "relation": relation,
+                "object": obj,
+                "hypothetical": True
+            })
+            return
+
         ctx = None
         props = None
 
@@ -420,10 +461,36 @@ class Parser:
 
         return templates[seed % len(templates)]
 
+    def _tag_hypothetical(self, response: str) -> str:
+        """Tag a response to indicate it's hypothetical (not persisted)."""
+        if not response:
+            return response
+        # Don't double-tag
+        if "[hypothetical]" in response.lower():
+            return response
+        return f"[Hypothetical] {response} (This is speculative and won't be stored.)"
+
     def parse(self, text: str) -> str:
         """Parse input text and update knowledge. Returns natural language response."""
         original = text
         t = text.lower().strip().rstrip("?.")
+
+        # --- Entity type detection: resolve self/system references ---
+        from ..context import detect_entity_type, ENTITY_SELF, ENTITY_SYSTEM, HYPOTHETICAL_TRIGGERS
+        t = self._preprocess_entity_references(t)
+
+        # --- Hypothetical mode detection ---
+        t_lower_check = t.lower().strip()
+        if not self.loom.context.hypothetical_mode:
+            # Check for hypothetical triggers
+            if self.loom.context.check_hypothetical_trigger(t_lower_check):
+                # Strip the trigger phrase from the text for further parsing
+                for trigger in HYPOTHETICAL_TRIGGERS:
+                    if t_lower_check.startswith(trigger):
+                        remainder = t_lower_check[len(trigger):].strip().lstrip(",").strip()
+                        if remainder:
+                            t = remainder
+                        break
 
         # Observe user input for style learning (only for statements, not questions)
         if not self._is_question(t) and hasattr(self.loom, 'style_learner'):
@@ -621,12 +688,17 @@ class Parser:
                     # Enrich bland acknowledgments with varied phrasing
                     result = self._enrich_acknowledgment(result, text)
                     # Store extra facts from structural extraction
-                    self._store_structural_extras()
+                    if not self.loom.context.hypothetical_mode:
+                        self._store_structural_extras()
+                    # Tag hypothetical responses
+                    if self.loom.context.hypothetical_mode:
+                        result = self._tag_hypothetical(result)
                     # Optionally add curiosity question to response
                     return self._maybe_add_curiosity(result)
 
             # Even if no pattern matched, store structural extras (purpose, comparisons)
-            self._store_structural_extras()
+            if not self.loom.context.hypothetical_mode:
+                self._store_structural_extras()
 
             # If nothing matched, maybe ask for clarification
             return self._maybe_add_curiosity(self._maybe_ask_clarification(t))
@@ -635,6 +707,7 @@ class Parser:
             self.loom._input_context = None
             self.loom._input_properties = None
             self._structural_result = None
+            self._current_entity_type = None
 
     # Import handler methods from other modules
     # These are bound to the class in __init__.py

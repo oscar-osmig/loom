@@ -39,10 +39,14 @@ CONFIDENCE_MEDIUM = "medium"
 CONFIDENCE_LOW = "low"
 
 # Minimum pattern support for neuron creation
-MIN_PATTERN_SUPPORT = 5  # Increased to prevent pollution
+MIN_PATTERN_SUPPORT = 3
 
 # Minimum confidence for adding discovered relations
-MIN_DISCOVERY_CONFIDENCE = 0.7
+MIN_DISCOVERY_CONFIDENCE = 0.6
+
+# Weak neuron thresholds for proactive strengthening
+WEAK_NEURON_MAX_CONNECTIONS = 3
+WEAK_NEURON_MAX_AVG_WEIGHT = 1.5
 
 # Maximum relations to add per discovery cycle (prevent pollution)
 MAX_RELATIONS_PER_CYCLE = 10
@@ -475,6 +479,129 @@ class ConnectionDiscoveryEngine:
 
         if self.loom.verbose and all_patterns:
             print(f"       [discovery: {len(all_patterns)} patterns, {len(lonely)} lonely neurons, {len(transitive_gaps)} gaps]")
+
+    def strengthen_weak_neurons(self, brain: "Loom"):
+        """
+        Find and strengthen weakly-connected neurons.
+
+        A "weak neuron" is an entity with fewer than WEAK_NEURON_MAX_CONNECTIONS
+        connections AND average connection weight below WEAK_NEURON_MAX_AVG_WEIGHT.
+
+        For each weak neuron, use spreading activation and shared categories/properties
+        to find related concepts and suggest new connections.
+        """
+        for entity, relations in brain.knowledge.items():
+            if entity == "self":
+                continue
+
+            # Count total connections (outgoing + incoming)
+            outgoing = sum(len(targets) for targets in relations.values())
+            incoming = 0
+            for other_entity, other_rels in brain.knowledge.items():
+                if other_entity == entity:
+                    continue
+                for targets in other_rels.values():
+                    if entity in targets:
+                        incoming += 1
+
+            total_connections = outgoing + incoming
+
+            if total_connections >= WEAK_NEURON_MAX_CONNECTIONS:
+                continue
+
+            # Check average connection weight
+            weights = []
+            if hasattr(brain, 'connection_weights'):
+                for key, weight in brain.connection_weights.items():
+                    if entity in key:
+                        weights.append(weight)
+
+            avg_weight = sum(weights) / len(weights) if weights else 0.0
+
+            if weights and avg_weight >= WEAK_NEURON_MAX_AVG_WEIGHT:
+                continue
+
+            # This is a weak neuron -- find related concepts to connect it
+
+            # Strategy 1: Find entities sharing the same categories
+            entity_categories = set(relations.get("is", []))
+            for other_entity, other_rels in brain.knowledge.items():
+                if other_entity == entity or other_entity == "self":
+                    continue
+                other_categories = set(other_rels.get("is", []))
+                shared_cats = entity_categories & other_categories
+                if shared_cats:
+                    self._suggest_connection(entity, other_entity, "similar_to",
+                                             0.5 + len(shared_cats) * 0.1,
+                                             "weak_neuron_category")
+
+            # Strategy 2: Find entities sharing properties
+            entity_props = set()
+            for rel in ["has", "can", "has_property"]:
+                for val in relations.get(rel, []):
+                    entity_props.add((rel, val))
+
+            if entity_props:
+                for other_entity, other_rels in brain.knowledge.items():
+                    if other_entity == entity or other_entity == "self":
+                        continue
+                    other_props = set()
+                    for rel in ["has", "can", "has_property"]:
+                        for val in other_rels.get(rel, []):
+                            other_props.add((rel, val))
+                    shared_props = entity_props & other_props
+                    if shared_props:
+                        self._suggest_connection(entity, other_entity, "similar_to",
+                                                 0.5 + len(shared_props) * 0.1,
+                                                 "weak_neuron_property")
+
+            # Strategy 3: Use spreading activation if available
+            if hasattr(brain, 'activation'):
+                brain.activation.activate(entity, amount=0.8)
+                brain.activation.spread(
+                    brain.knowledge,
+                    brain.connection_weights if hasattr(brain, 'connection_weights') else None
+                )
+                coactivated = brain.activation.find_coactivated(min_sources=1)
+                for node, level, sources in coactivated:
+                    if node != entity and level >= 0.3:
+                        self._suggest_connection(entity, node, "related_to",
+                                                 min(0.8, level),
+                                                 "weak_neuron_activation")
+
+            if brain.verbose:
+                print(f"       [weak neuron: {entity} ({total_connections} connections, "
+                      f"avg weight {avg_weight:.2f}) — seeking new links]")
+
+    def _suggest_connection(self, entity1: str, entity2: str, relation: str,
+                            confidence: float, method: str):
+        """Suggest a new connection between two entities from weak neuron strengthening."""
+        # Use existing quality checks from _add_discovered_relation
+        if not self._is_valid_entity(entity1) or not self._is_valid_entity(entity2):
+            return
+
+        existing = self.loom.get(entity1, relation) or []
+        if entity2 in existing:
+            return
+
+        # Only add if confidence meets threshold
+        if confidence < MIN_DISCOVERY_CONFIDENCE:
+            return
+
+        provenance = {
+            "source_type": "discovery",
+            "method": method,
+            "confidence": confidence,
+            "timestamp": time.time()
+        }
+
+        conf_level = CONFIDENCE_HIGH if confidence >= 0.8 else CONFIDENCE_MEDIUM
+        self.loom.add_fact(entity1, relation, entity2, confidence=conf_level, provenance=provenance)
+        self._stats["relations_added"] += 1
+
+        if self.loom.verbose:
+            print(f"       [strengthened: {entity1} {relation} {entity2} "
+                  f"(confidence: {confidence:.2f}, via {method})]")
 
     def _find_property_clusters(self) -> List[DiscoveredPattern]:
         """

@@ -63,6 +63,7 @@ class CuriosityNode:
     status: CuriosityNodeStatus = CuriosityNodeStatus.ACTIVE
     related_concepts: Set[str] = field(default_factory=set)  # From spreading activation
     source_context: str = ""            # What triggered this curiosity
+    status_changed_at: float = field(default_factory=time.time)  # When status last changed
 
     @property
     def node_name(self) -> str:
@@ -175,6 +176,7 @@ class CuriosityNodeManager:
 
         node = self._nodes[topic]
         node.status = CuriosityNodeStatus.EXPLORING
+        node.status_changed_at = time.time()
 
         related = []
 
@@ -219,6 +221,7 @@ class CuriosityNodeManager:
 
         node = self._nodes[topic]
         node.status = CuriosityNodeStatus.HYPOTHESIZING
+        node.status_changed_at = time.time()
 
         # First explore if not done
         if not node.related_concepts:
@@ -293,11 +296,66 @@ class CuriosityNodeManager:
 
         return True
 
+    def resolve_from_knowledge(self, brain) -> int:
+        """
+        Resolve curiosity nodes whose questions are now answered by
+        existing knowledge in the brain.
+
+        Iterates all ACTIVE nodes and checks whether the brain has facts
+        about the node's concept. If facts exist, the curiosity is satisfied
+        and the node is marked RESOLVED.
+
+        Args:
+            brain: The Loom brain instance to check knowledge against.
+
+        Returns:
+            Number of nodes resolved.
+        """
+        resolved_count = 0
+        to_resolve = []
+
+        for topic, node in self._nodes.items():
+            if node.status != CuriosityNodeStatus.ACTIVE:
+                continue
+
+            # Check if the brain now has facts about this concept
+            concept_facts = brain.knowledge.get(topic, {})
+            if not concept_facts:
+                continue
+
+            # Check if there are meaningful relations (not just curiosity_node marker)
+            meaningful = {r: v for r, v in concept_facts.items()
+                         if r != "is" or v != ["curiosity_node"]}
+            if meaningful:
+                to_resolve.append(topic)
+
+        for topic in to_resolve:
+            node = self._nodes[topic]
+            node.status = CuriosityNodeStatus.RESOLVED
+            node.status_changed_at = time.time()
+
+            # Remove curiosity node marker from knowledge graph
+            self.loom.storage.retract_fact(node.node_name, "is", "curiosity_node")
+            del self._nodes[topic]
+            resolved_count += 1
+
+            if self.loom.verbose:
+                print(f"       [curiosity resolved from knowledge: ?_{topic}]")
+
+        if resolved_count:
+            self.loom._invalidate_cache()
+
+        return resolved_count
+
     def cleanup_expired(self) -> int:
         """
-        Remove expired curiosity nodes.
+        Remove expired curiosity nodes and unstick stalled ones.
 
-        Returns number of nodes cleaned up.
+        - Expired nodes (timed out or max attempts) are removed.
+        - Nodes stuck in EXPLORING for >10 minutes are moved back to ACTIVE.
+        - Nodes stuck in HYPOTHESIZING for >30 minutes are moved back to ACTIVE.
+
+        Returns number of nodes cleaned up (expired only).
         """
         now = time.time()
         if now - self._last_cleanup < self._cleanup_interval:
@@ -313,6 +371,23 @@ class CuriosityNodeManager:
             if node.is_expired:
                 expired.append(topic)
                 node.status = CuriosityNodeStatus.EXPIRED
+                continue
+
+            # Unstick nodes that have been EXPLORING too long (>10 minutes)
+            if (node.status == CuriosityNodeStatus.EXPLORING and
+                    now - node.status_changed_at > 600):
+                node.status = CuriosityNodeStatus.ACTIVE
+                node.status_changed_at = now
+                if self.loom.verbose:
+                    print(f"       [curiosity unstuck: ?_{topic} EXPLORING -> ACTIVE]")
+
+            # Unstick nodes that have been HYPOTHESIZING too long (>30 minutes)
+            if (node.status == CuriosityNodeStatus.HYPOTHESIZING and
+                    now - node.status_changed_at > 1800):
+                node.status = CuriosityNodeStatus.ACTIVE
+                node.status_changed_at = now
+                if self.loom.verbose:
+                    print(f"       [curiosity unstuck: ?_{topic} HYPOTHESIZING -> ACTIVE]")
 
         # Remove expired nodes
         for topic in expired:

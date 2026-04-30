@@ -17,7 +17,8 @@ Enhanced with:
 - Automatic connection discovery
 """
 
-from typing import Dict, Tuple
+import time
+from typing import Dict, List, Tuple
 
 from .normalizer import normalize, prettify_cause, prettify_effect
 from .inference import InferenceEngine
@@ -154,6 +155,14 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Track last activation time for each connection (for decay)
         self.connection_times: Dict[Tuple[str, str, str], float] = {}
 
+        self.dormant_connections: set = set()
+        self.dormant_entities: set = set()
+
+        # Access tracking for concept reinforcement
+        self.access_counts: Dict[str, int] = {}
+        self.last_accessed: Dict[str, float] = {}
+        self.core_concepts: set = set()
+
         # Text chunker for paragraph processing
         self.chunker = TextChunker()
 
@@ -247,13 +256,65 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
     def knowledge(self) -> dict:
         """Get knowledge graph (cached from storage)."""
         if self._cache_dirty or self._knowledge_cache is None:
-            self._knowledge_cache = self.storage.get_all_knowledge()
+            raw = self.storage.get_all_knowledge()
+            if self.dormant_entities:
+                filtered = {}
+                for entity, relations in raw.items():
+                    if entity in self.dormant_entities:
+                        continue
+                    filtered[entity] = relations
+                self._knowledge_cache = filtered
+            else:
+                self._knowledge_cache = raw
             self._cache_dirty = False
         return self._knowledge_cache
 
     def _invalidate_cache(self):
         """Mark cache as needing refresh."""
         self._cache_dirty = True
+
+    # ── Access tracking and concept reinforcement ─────────────────────
+
+    def _track_access(self, entity: str):
+        """
+        Track access to a concept and reinforce its connections.
+
+        Every 5 accesses, give the concept's connections a small Hebbian boost.
+        At 20+ accesses, mark the concept as "core" so it never goes dormant.
+        """
+        entity = normalize(entity)
+        if not entity or not self._is_valid_entity(entity):
+            return
+
+        self.access_counts[entity] = self.access_counts.get(entity, 0) + 1
+        self.last_accessed[entity] = time.time()
+        count = self.access_counts[entity]
+
+        # Every 5 accesses, boost connections involving this entity
+        if count % 5 == 0:
+            for key in list(self.connection_weights.keys()):
+                subj, rel, obj = key
+                if subj == entity or obj == entity:
+                    self.strengthen_connection(subj, rel, obj, amount=0.1)
+
+        # At 20+ accesses, promote to core concept (never goes dormant)
+        if count >= 20 and entity not in self.core_concepts:
+            self.core_concepts.add(entity)
+            # Ensure it's not in dormant_entities
+            self.dormant_entities.discard(entity)
+            if self.verbose:
+                print(f"       [core concept: {entity} ({count} accesses)]")
+
+    def get_access_count(self, entity: str) -> int:
+        """Return the access count for an entity."""
+        return self.access_counts.get(normalize(entity), 0)
+
+    def get_most_accessed(self, n: int = 10) -> List[Tuple[str, int]]:
+        """Return the top-N most accessed concepts."""
+        sorted_counts = sorted(
+            self.access_counts.items(), key=lambda x: x[1], reverse=True
+        )
+        return sorted_counts[:n]
 
     # ── Per-conversation context pool ──────────────────────────────────
 
@@ -492,29 +553,54 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
     def cleanup_junk_neurons(self) -> int:
         """
-        Remove junk neurons from the knowledge graph.
-        Returns the number of neurons removed.
+        Mark junk neurons as dormant in the knowledge graph.
+        Returns the number of neurons marked dormant.
         """
-        removed = 0
-        to_remove = []
+        marked = 0
+        to_mark = []
 
-        for entity, relations in self.knowledge.items():
+        all_knowledge = self.storage.get_all_knowledge()
+        for entity, relations in all_knowledge.items():
             if entity == 'self':
                 continue
+            if entity in self.dormant_entities:
+                continue
+            if entity in self.core_concepts:
+                continue
             if self._is_junk_neuron(entity, relations):
-                to_remove.append(entity)
+                to_mark.append(entity)
 
-        for entity in to_remove:
-            # Remove all facts involving this entity
-            self.storage.remove_entity(entity)
-            removed += 1
+        for entity in to_mark:
+            self.dormant_entities.add(entity)
+            marked += 1
             if self.verbose:
-                print(f"       [cleaned up junk neuron: {entity}]")
+                print(f"       [dormant neuron: {entity}]")
 
-        if removed > 0:
+        if marked > 0:
             self._invalidate_cache()
 
-        return removed
+        return marked
+
+    def reactivate_entity(self, entity: str):
+        """
+        Reactivate a dormant entity, restoring it to active status.
+        Also reactivates any dormant connections involving this entity.
+        """
+        if entity not in self.dormant_entities:
+            return
+        self.dormant_entities.discard(entity)
+
+        # Reactivate dormant connections that involve this entity
+        to_reactivate = [
+            key for key in self.dormant_connections
+            if key[0] == entity or key[2] == entity
+        ]
+        for key in to_reactivate:
+            self.reactivate_connection(key)
+
+        self._invalidate_cache()
+        if self.verbose:
+            print(f"       [reactivated neuron: {entity}]")
 
     def add_fact(self, subject: str, relation: str, obj: str,
                  confidence: str = None, _save: bool = True,
@@ -578,6 +664,11 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             if self.verbose:
                 print(f"       [rejected invalid entity: {s} or {o}]")
             return
+
+        if s in self.dormant_entities:
+            self.reactivate_entity(s)
+        if o in self.dormant_entities:
+            self.reactivate_entity(o)
 
         # Use speech provenance if available and no explicit provenance given
         if provenance is None and self._current_speech_provenance is not None:
@@ -820,7 +911,9 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             cascade: If True (default), also retract dependent inferred facts
 
         Returns:
-            dict with 'retracted' (bool) and 'cascade_count' (int)
+            dict with 'retracted' (bool), 'cascade_count' (int),
+            and when the fact existed: 'old_properties' (dict),
+            'old_context' (str), 'old_object' (str)
         """
         s = normalize(subject)
         r = relation.lower().strip()
@@ -924,8 +1017,85 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         """Consolidate confidence when a fact is repeated."""
         return consolidate_confidence(current, new)
 
+    def _decay_stale_concepts(self):
+        """
+        Decay confidence for concepts not accessed in 24+ hours.
+
+        Concepts that haven't been mentioned or queried recently get their
+        confidence lowered by one level: high -> medium, medium -> low.
+        Low stays low. Facts are NEVER deleted -- just weakened.
+
+        Skips:
+        - Core concepts (self.core_concepts)
+        - Concepts with high access counts (>= 10)
+        - Concepts already decayed within the last 24 hours
+        """
+        if not hasattr(self, '_last_staleness_decay'):
+            self._last_staleness_decay: Dict[str, float] = {}
+
+        now = time.time()
+        stale_threshold = 24 * 3600  # 24 hours
+        decay_cooldown = 24 * 3600   # Only decay once per 24h per concept
+
+        confidence_demotion = {
+            "high": "medium",
+            "medium": "low",
+            "low": "low",  # Floor -- never delete
+        }
+
+        decayed_count = 0
+
+        for concept in list(self.knowledge.keys()):
+            # Skip core concepts
+            if concept in self.core_concepts:
+                continue
+
+            # Skip system entities
+            if concept in ("self", "loom", "user"):
+                continue
+
+            # Skip curiosity nodes
+            if concept.startswith("?_"):
+                continue
+
+            # Skip high-access-count concepts (well-established knowledge)
+            if self.access_counts.get(concept, 0) >= 10:
+                continue
+
+            # Check staleness
+            last_access = self.last_accessed.get(concept, 0.0)
+            if now - last_access < stale_threshold:
+                continue
+
+            # Check decay cooldown -- don't decay the same concept twice in 24h
+            last_decay = self._last_staleness_decay.get(concept, 0.0)
+            if now - last_decay < decay_cooldown:
+                continue
+
+            # Decay all facts for this concept by one confidence level
+            relations = self.knowledge.get(concept, {})
+            did_decay = False
+            for relation, objects in relations.items():
+                for obj in objects:
+                    current = self.storage.get_confidence(concept, relation, obj)
+                    new = confidence_demotion.get(current, current)
+                    if new != current:
+                        self.storage.update_confidence(concept, relation, obj, new)
+                        did_decay = True
+
+            if did_decay:
+                self._last_staleness_decay[concept] = now
+                decayed_count += 1
+                if self.verbose:
+                    print(f"       [staleness decay: {concept}]")
+
+        if decayed_count:
+            self._invalidate_cache()
+
+        return decayed_count
+
     def get(self, subject: str, relation: str, context: str = None,
-            temporal: str = None) -> list | None:
+            temporal: str = None, include_dormant: bool = False) -> list | None:
         """
         Get targets for a subject-relation pair, optionally filtered by context and temporal scope.
 
@@ -936,27 +1106,40 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             temporal: Optional temporal filter ("always", "currently", "past", "future", "sometimes")
                      If None, returns all facts regardless of temporal scope.
                      If "currently", returns "always" and "currently" scoped facts.
+            include_dormant: If False (default), skip dormant entities
 
         Returns:
             List of target values or None if not found
         """
+        s = normalize(subject)
+        r = relation.lower().strip()
+
+        # Track access for concept reinforcement
+        self._track_access(s)
+
+        # Skip dormant subjects unless explicitly requested
+        if not include_dormant and s in self.dormant_entities:
+            return None
+
         # If no temporal filter, use the simple query
         if temporal is None:
-            results = self.storage.get_facts(normalize(subject), relation.lower().strip(),
-                                              context=context)
+            results = self.storage.get_facts(s, r, context=context)
+            # Filter out dormant objects from results
+            if results and not include_dormant and self.dormant_entities:
+                results = [o for o in results if o not in self.dormant_entities]
             return results if results else None
 
         # Get facts with properties to filter by temporal
-        full_facts = self.storage.get_facts_with_context(
-            normalize(subject), relation.lower().strip()
-        )
+        full_facts = self.storage.get_facts_with_context(s, r)
 
         if not full_facts:
             return None
 
-        # Filter by temporal scope
+        # Filter by temporal scope (and dormant objects)
         filtered = []
         for fact in full_facts:
+            if not include_dormant and fact["object"] in self.dormant_entities:
+                continue
             props = fact.get("properties", {})
             fact_temporal = props.get("temporal", "always")
 
@@ -1005,34 +1188,71 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
         return False
 
-    def get_with_properties(self, subject: str, relation: str) -> list | None:
+    def get_with_properties(self, subject: str, relation: str,
+                            include_dormant: bool = False) -> list | None:
         """
         Get facts with their context and properties (Quad + Properties).
 
+        Args:
+            subject: The entity to query
+            relation: The relation type
+            include_dormant: If False (default), skip dormant entities
+
         Returns list of dicts with 'object', 'context', 'properties' keys.
         """
-        results = self.storage.get_facts_with_context(
-            normalize(subject), relation.lower().strip()
-        )
+        s = normalize(subject)
+
+        # Skip dormant subjects unless explicitly requested
+        if not include_dormant and s in self.dormant_entities:
+            return None
+
+        results = self.storage.get_facts_with_context(s, relation.lower().strip())
+
+        # Filter out dormant objects from results
+        if results and not include_dormant and self.dormant_entities:
+            results = [r for r in results if r["object"] not in self.dormant_entities]
+
         return results if results else None
 
     def get_fact_metadata(self, subject: str, relation: str, obj: str,
-                          context: str = None) -> dict | None:
-        """Get full metadata for a specific fact."""
+                          context: str = None,
+                          include_dormant: bool = False) -> dict | None:
+        """
+        Get full metadata for a specific fact.
+
+        Args:
+            subject: The subject of the fact
+            relation: The relation type
+            obj: The object of the fact
+            context: Optional context filter
+            include_dormant: If False (default), skip dormant entities
+        """
+        s = normalize(subject)
+        o = normalize(obj)
+
+        # Skip dormant entities unless explicitly requested
+        if not include_dormant and (s in self.dormant_entities or o in self.dormant_entities):
+            return None
+
         return self.storage.get_fact_with_metadata(
-            normalize(subject), relation.lower().strip(), normalize(obj),
-            context=context
+            s, relation.lower().strip(), o, context=context
         )
 
     def copy_properties(self, target: str, source: str):
         """Copy properties from source to target (Hebbian-style linking)."""
         source_norm = normalize(source)
+        # Skip if source is dormant
+        if source_norm in self.dormant_entities:
+            return
         # Relations that should be copied between similar things
         copyable = ("color", "is", "can", "has", "eats", "lives_in", "needs")
         source_facts = self.storage.get_all_facts_for_subject(source_norm)
         for rel, values in source_facts.items():
             if rel in copyable:
                 for v in values:
+                    # Skip dormant objects
+                    if v in self.dormant_entities:
+                        continue
                     existing = self.get(target, rel) or []
                     if v not in existing:
                         self.add_fact(target, rel, v)
@@ -1264,6 +1484,13 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if hasattr(self, 'connection_weights'):
             self.connection_weights.clear()
             self.connection_times.clear()
+        self.dormant_connections.clear()
+        self.dormant_entities.clear()
+        self.access_counts.clear()
+        self.last_accessed.clear()
+        self.core_concepts.clear()
+        if hasattr(self, '_last_staleness_decay'):
+            self._last_staleness_decay.clear()
         if hasattr(self, 'curiosity_nodes'):
             self.curiosity_nodes = CuriosityNodeManager(self)
         if hasattr(self, 'curiosity'):

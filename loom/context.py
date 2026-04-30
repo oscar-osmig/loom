@@ -11,6 +11,9 @@ Enhanced with:
 - Recency-weighted entity tracking
 - Semantic fit checking using knowledge graph
 - Entity salience scoring
+- Entity type disambiguation (self/system/third-party)
+- Hypothetical mode for speculative reasoning
+- Topic relevance scoring for smooth context switching
 """
 
 import time
@@ -19,11 +22,49 @@ from typing import Optional, List, Dict, Tuple
 import re
 
 
+# Entity type constants
+ENTITY_SELF = 'self'            # User/speaker references (I, me, my)
+ENTITY_SYSTEM = 'system'        # Loom references (you, loom, your)
+ENTITY_THIRD_PARTY = 'third_party'  # Actual entities in the knowledge graph
+
+# Patterns for entity type detection
+_SELF_WORDS = frozenset({
+    "i", "me", "my", "mine", "myself", "i'm", "i've", "i'd", "i'll"
+})
+_SYSTEM_WORDS = frozenset({
+    "you", "your", "yours", "yourself", "loom"
+})
+
+# Hypothetical trigger phrases
+HYPOTHETICAL_TRIGGERS = (
+    "what if", "imagine", "suppose", "hypothetically",
+    "let's say", "lets say", "let us say", "in theory",
+    "assuming", "pretend", "if we assume",
+)
+
 # Entity salience weights
 SALIENCE_SUBJECT = 3.0      # Subjects are highly salient
 SALIENCE_OBJECT = 2.0       # Objects are moderately salient
 SALIENCE_MENTIONED = 1.0    # Just mentioned
 SALIENCE_DECAY = 0.3        # Decay per turn
+
+
+def detect_entity_type(word: str) -> str:
+    """
+    Classify an entity reference as SELF, SYSTEM, or THIRD_PARTY.
+
+    Args:
+        word: A single word or short phrase to classify.
+
+    Returns:
+        One of ENTITY_SELF, ENTITY_SYSTEM, or ENTITY_THIRD_PARTY.
+    """
+    token = word.lower().strip()
+    if token in _SELF_WORDS:
+        return ENTITY_SELF
+    if token in _SYSTEM_WORDS:
+        return ENTITY_SYSTEM
+    return ENTITY_THIRD_PARTY
 
 
 class EntityMention:
@@ -90,6 +131,14 @@ class ConversationContext:
         self.entity_mentions: List[EntityMention] = []
         self.current_turn = 0
 
+        # Hypothetical mode
+        self.hypothetical_mode: bool = False
+        self.hypothetical_facts: list = []
+        self._hypothetical_trigger: str = None
+
+        # Previous topics stack for "going back" to prior discussions
+        self.previous_topics: deque = deque(maxlen=5)
+
         # Knowledge graph reference (set by Loom)
         self._knowledge_ref = None
 
@@ -113,9 +162,14 @@ class ConversationContext:
         """Update context after processing a statement."""
         if subject:
             self.last_subject = subject
-            # Update topic if it's a new main subject
+            # Update topic with relevance-aware switching
             if self._is_topic_change(subject):
+                relevance = self.topic_relevance_score(subject, self.current_topic)
                 if self.current_topic:
+                    if relevance < 0.3:
+                        # Low relevance: clean switch, archive current topic
+                        self.previous_topics.append(self.current_topic)
+                    # High relevance: blend into existing context (keep topic_stack intact)
                     self.topic_stack.append(self.current_topic)
                 self.current_topic = subject
             # Track entity with salience
@@ -131,12 +185,25 @@ class ConversationContext:
 
         # Track statement
         if subject or obj:
-            self.recent_statements.append({
+            stmt = {
                 "subject": subject,
                 "relation": relation,
                 "object": obj,
                 "type": statement_type
-            })
+            }
+            # In hypothetical mode, also track in hypothetical_facts
+            if self.hypothetical_mode:
+                stmt["hypothetical"] = True
+                self.hypothetical_facts.append(stmt)
+            self.recent_statements.append(stmt)
+
+        # Auto-exit hypothetical mode on definitive statements
+        if self.hypothetical_mode and statement_type == "statement":
+            # A plain factual statement (not a question, not hypothetical phrasing)
+            # signals the user has moved on from the hypothetical
+            self._hypothetical_turn_count = getattr(self, '_hypothetical_turn_count', 0) + 1
+            if self._hypothetical_turn_count > 2:
+                self.exit_hypothetical()
 
         # Advance turn for salience decay
         self.next_turn()
@@ -145,10 +212,16 @@ class ConversationContext:
         """Detect if this is a topic change."""
         if not self.current_topic:
             return True
-        # Different subject that's not a pronoun
-        if subject.lower() not in ["it", "they", "them", "this", "that", "he", "she"]:
-            if subject.lower() != self.current_topic.lower():
-                return True
+        # Skip pronouns and self/system references
+        subj_lower = subject.lower()
+        if subj_lower in ("it", "they", "them", "this", "that", "he", "she"):
+            return False
+        # Self/system references are not topic changes
+        entity_type = detect_entity_type(subject)
+        if entity_type in (ENTITY_SELF, ENTITY_SYSTEM):
+            return False
+        if subj_lower != self.current_topic.lower():
+            return True
         return False
 
     def set_knowledge_ref(self, knowledge_graph):
@@ -157,12 +230,20 @@ class ConversationContext:
 
     def add_entity(self, text: str, role: str = 'other'):
         """
-        Track a mentioned entity with salience scoring.
+        Track a mentioned entity with salience scoring and entity type detection.
 
         Args:
             text: The entity text
             role: 'subject', 'object', or 'other'
         """
+        # Classify entity type (self/system/third-party)
+        entity_type = detect_entity_type(text)
+
+        # Don't track self/system references as entities for coreference
+        # They are handled by dialogue role resolution
+        if entity_type != ENTITY_THIRD_PARTY:
+            return
+
         # Decay existing entities
         for entity in self.entity_mentions:
             entity.decay(self.current_turn)
@@ -335,6 +416,144 @@ class ConversationContext:
 
         return [(e.text, e.salience) for e in sorted_entities[:limit]]
 
+    # =========================================================================
+    # HYPOTHETICAL MODE
+    # =========================================================================
+
+    def check_hypothetical_trigger(self, text: str) -> bool:
+        """
+        Check if text contains a hypothetical trigger phrase.
+
+        Returns True if a hypothetical trigger was detected and mode was entered.
+        """
+        text_lower = text.lower().strip()
+        for trigger in HYPOTHETICAL_TRIGGERS:
+            if text_lower.startswith(trigger):
+                self.enter_hypothetical(trigger)
+                return True
+        return False
+
+    def enter_hypothetical(self, trigger_phrase: str):
+        """Enter hypothetical mode. Facts will be tracked but not persisted."""
+        self.hypothetical_mode = True
+        self._hypothetical_trigger = trigger_phrase
+        self._hypothetical_turn_count = 0
+        self.hypothetical_facts = []
+
+    def exit_hypothetical(self) -> list:
+        """
+        Exit hypothetical mode and return the hypothetical facts that were collected.
+
+        Returns:
+            List of fact dicts that were stated during hypothetical mode.
+        """
+        facts = list(self.hypothetical_facts)
+        self.hypothetical_mode = False
+        self._hypothetical_trigger = None
+        self._hypothetical_turn_count = 0
+        self.hypothetical_facts = []
+        return facts
+
+    @property
+    def is_hypothetical(self) -> bool:
+        """Check if currently in hypothetical mode."""
+        return self.hypothetical_mode
+
+    # =========================================================================
+    # TOPIC RELEVANCE SCORING
+    # =========================================================================
+
+    def topic_relevance_score(self, new_topic: str, current_topic: str) -> float:
+        """
+        Calculate how related a new topic is to the current topic
+        using the knowledge graph.
+
+        Returns a score from 0.0 (unrelated) to 1.0 (closely related).
+        Uses graph connectivity: shared relations, direct links, common parents.
+        """
+        if not current_topic or not new_topic:
+            return 0.0
+
+        if new_topic.lower() == current_topic.lower():
+            return 1.0
+
+        if not self._knowledge_ref:
+            return 0.0
+
+        new_key = new_topic.lower().replace(' ', '_')
+        cur_key = current_topic.lower().replace(' ', '_')
+
+        score = 0.0
+        kg = self._knowledge_ref
+
+        new_rels = kg.get(new_key, {})
+        cur_rels = kg.get(cur_key, {})
+
+        # Direct connection: new_topic mentions current_topic or vice versa
+        for rel, values in new_rels.items():
+            if isinstance(values, list):
+                for v in values:
+                    if cur_key in str(v).lower().replace(' ', '_'):
+                        score += 0.5
+                        break
+
+        for rel, values in cur_rels.items():
+            if isinstance(values, list):
+                for v in values:
+                    if new_key in str(v).lower().replace(' ', '_'):
+                        score += 0.5
+                        break
+
+        # Shared parent: both are "is" something in common
+        new_parents = set()
+        cur_parents = set()
+        for rel_key in ('is', 'is_a', 'type_of', 'kind_of'):
+            for v in new_rels.get(rel_key, []):
+                new_parents.add(str(v).lower().replace(' ', '_'))
+            for v in cur_rels.get(rel_key, []):
+                cur_parents.add(str(v).lower().replace(' ', '_'))
+
+        common_parents = new_parents & cur_parents
+        if common_parents:
+            score += 0.3
+
+        # Shared relations (both have 'eats', 'lives_in', etc.)
+        new_rel_names = set(new_rels.keys())
+        cur_rel_names = set(cur_rels.keys())
+        shared_rels = new_rel_names & cur_rel_names
+        # Exclude very generic relations from counting
+        shared_rels -= {'is', 'is_a', 'type_of'}
+        if shared_rels:
+            score += min(0.2, len(shared_rels) * 0.05)
+
+        # Check if new topic appears in recent statements about current topic
+        for stmt in self.recent_statements:
+            if stmt.get("subject") and stmt.get("object"):
+                subj = stmt["subject"].lower().replace(' ', '_')
+                obj = stmt["object"].lower().replace(' ', '_')
+                if (subj == cur_key and obj == new_key) or \
+                   (subj == new_key and obj == cur_key):
+                    score += 0.3
+                    break
+
+        return min(1.0, score)
+
+    def get_previous_topic(self) -> str:
+        """Get the most recent previous topic for 'going back'."""
+        if self.previous_topics:
+            return self.previous_topics[-1]
+        return None
+
+    def return_to_previous_topic(self) -> str:
+        """Pop and return to the most recent previous topic."""
+        if self.previous_topics:
+            old_topic = self.current_topic
+            self.current_topic = self.previous_topics.pop()
+            if old_topic:
+                self.topic_stack.append(old_topic)
+            return self.current_topic
+        return None
+
     def get_context_summary(self) -> dict:
         """Get current context state."""
         return {
@@ -344,7 +563,9 @@ class ConversationContext:
             "last_relation": self.last_relation,
             "mode": self.mode,
             "pending_clarification": self.pending_clarification,
-            "recent_count": len(self.recent_statements)
+            "recent_count": len(self.recent_statements),
+            "hypothetical_mode": self.hypothetical_mode,
+            "previous_topics": list(self.previous_topics),
         }
 
     def to_snapshot(self) -> dict:
@@ -353,12 +574,14 @@ class ConversationContext:
             "conversation_id": self.conversation_id,
             "current_topic": self.current_topic,
             "topic_stack": list(self.topic_stack),
+            "previous_topics": list(self.previous_topics),
             "last_subject": self.last_subject,
             "last_object": self.last_object,
             "last_relation": self.last_relation,
             "recent_statements": list(self.recent_statements),
             "mode": self.mode,
             "current_turn": self.current_turn,
+            "hypothetical_mode": self.hypothetical_mode,
         }
 
     @classmethod
@@ -371,10 +594,13 @@ class ConversationContext:
         ctx.last_relation = data.get("last_relation")
         ctx.mode = data.get("mode", "normal")
         ctx.current_turn = data.get("current_turn", 0)
+        ctx.hypothetical_mode = data.get("hypothetical_mode", False)
         for stmt in data.get("recent_statements", []):
             ctx.recent_statements.append(stmt)
         for topic in data.get("topic_stack", []):
             ctx.topic_stack.append(topic)
+        for topic in data.get("previous_topics", []):
+            ctx.previous_topics.append(topic)
         return ctx
 
     def set_clarification(self, question: str, about: str):

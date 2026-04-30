@@ -18,6 +18,14 @@ import uuid
 from .normalizer import prettify_cause, prettify_effect
 
 
+CONFIDENCE_SCORE = {"high": 1.0, "medium": 0.6, "low": 0.3}
+
+# Confidence weights for chain scoring (product of premise confidences)
+CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.7, "low": 0.4}
+
+# Minimum product-of-confidences required for an inference chain to fire
+MIN_CHAIN_CONFIDENCE = 0.3
+
 # Relations that support transitive chaining (P->Q, Q->R => P->R)
 TRANSITIVE_RELATIONS = ["looks_like", "is", "causes", "leads_to", "part_of"]
 
@@ -130,6 +138,18 @@ class InferenceEngine:
                 if subject in targets:
                     self._check_chain_from(node, relation)
 
+    def _has_confident_facts(self, concept: str) -> bool:
+        """Check whether a concept has at least one high or medium confidence fact."""
+        facts = self.loom.knowledge.get(concept, {})
+        if not facts:
+            return False
+        for rel, objects in facts.items():
+            for obj in objects:
+                score = self._get_fact_confidence_score(concept, rel, obj)
+                if score >= CONFIDENCE_WEIGHTS["medium"]:
+                    return True
+        return False
+
     def _process_coactivation(self, subject: str, obj: str,
                                coactivated: List[Tuple[str, float, Set[str]]]):
         """
@@ -137,6 +157,10 @@ class InferenceEngine:
 
         When subject and object both activate a third node, this suggests
         they share a relationship through that concept.
+
+        Only creates connections if at least one of the co-activated nodes
+        has high or medium confidence facts — avoids speculative links
+        between two nodes that only have low-confidence knowledge.
         """
         for node, level, sources in coactivated:
             # Skip if it's one of our original nodes
@@ -145,6 +169,15 @@ class InferenceEngine:
 
             # Check if both subject and object contributed
             if subject in sources and obj in sources:
+                # Avoid speculative inference: require at least one node
+                # with high or medium confidence facts
+                if not (self._has_confident_facts(subject) or
+                        self._has_confident_facts(obj)):
+                    if self.loom.verbose:
+                        print(f"       [skipped co-activation: {subject} & {obj} "
+                              f"— both lack confident facts]")
+                    continue
+
                 # This node is co-activated by both - they share something
                 inference_key = (subject, "shares", node)
 
@@ -190,16 +223,30 @@ class InferenceEngine:
 
         Example: If dogs is mammals, and mammals has fur,
         then dogs should inherit has fur.
+
+        Chain confidence = product of premise confidences.
+        Only inherits when chain confidence >= MIN_CHAIN_CONFIDENCE.
         """
         category_facts = self.loom.knowledge.get(category, {})
+        membership_score = self._get_fact_confidence_score(instance, "is", category)
 
         for relation in PROPERTY_RELATIONS:
             if relation in category_facts:
                 for value in category_facts[relation]:
-                    # Check if instance already has this
                     existing = self.loom.get(instance, relation) or []
                     if value not in existing:
-                        # Create provenance tracking the inheritance
+                        prop_score = self._get_fact_confidence_score(category, relation, value)
+                        chain_score = membership_score * prop_score
+
+                        # Skip chains below minimum confidence threshold
+                        if chain_score < MIN_CHAIN_CONFIDENCE:
+                            if self.loom.verbose:
+                                print(f"       [skipped inheritance: {instance} {relation} {value} "
+                                      f"— chain confidence {chain_score:.2f} < {MIN_CHAIN_CONFIDENCE}]")
+                            continue
+
+                        conf_label = "high" if chain_score >= 0.9 else ("medium" if chain_score >= 0.5 else "low")
+
                         provenance = self._create_provenance(
                             source_type="inheritance",
                             premises=[
@@ -209,14 +256,14 @@ class InferenceEngine:
                             rule_id="property_inheritance"
                         )
 
-                        # Inherit with medium confidence
                         self.loom.add_fact(instance, relation, value,
-                                          confidence="medium", _save=True,
+                                          confidence=conf_label, _save=True,
                                           provenance=provenance)
                         self.inferences.append((instance, relation, value, 1))
 
                         if self.loom.verbose:
-                            print(f"       [inherited: {instance} {relation} {value} from {category}]")
+                            print(f"       [inherited: {instance} {relation} {value} from {category} "
+                                  f"(chain={chain_score:.2f}, {conf_label})]")
 
     def _background_loop(self):
         """
@@ -258,13 +305,17 @@ class InferenceEngine:
                 if derived and self.loom.verbose:
                     print(f"       [forward chain: {len(derived)} facts derived]")
 
-            # Run connection discovery every 10 cycles (30 seconds)
-            if cycle_count % 10 == 0 and hasattr(self.loom, 'discovery_engine'):
+            # Run connection discovery every 5 cycles (15 seconds)
+            if cycle_count % 5 == 0 and hasattr(self.loom, 'discovery_engine'):
                 self.loom.discovery_engine.run_background_discovery()
                 # Auto-create neurons from strong patterns
                 created = self.loom.discovery_engine.create_pending_neurons()
                 if created and self.loom.verbose:
                     print(f"       [discovery: created {len(created)} new neurons]")
+
+            # Strengthen weak neurons every 8 cycles (24 seconds)
+            if cycle_count % 8 == 0 and hasattr(self.loom, 'discovery_engine'):
+                self.loom.discovery_engine.strengthen_weak_neurons(self.loom)
 
             # Detect category bridges every 4 cycles (12 seconds)
             if cycle_count % 4 == 0:
@@ -286,6 +337,18 @@ class InferenceEngine:
                 propagated = self.loom.frame_manager.run_background_cycle()
                 if propagated and self.loom.verbose:
                     print(f"       [frames: {len(propagated)} category propagations]")
+
+            # Resolve curiosity nodes from learned knowledge every 10 cycles (30 seconds)
+            if cycle_count % 10 == 0 and hasattr(self.loom, 'curiosity_nodes'):
+                resolved = self.loom.curiosity_nodes.resolve_from_knowledge(self.loom)
+                if resolved and self.loom.verbose:
+                    print(f"       [curiosity resolution: {resolved} nodes resolved from knowledge]")
+
+            # Decay stale concepts every 100 cycles (~5 minutes)
+            if cycle_count % 100 == 0 and hasattr(self.loom, '_decay_stale_concepts'):
+                decayed = self.loom._decay_stale_concepts()
+                if decayed and self.loom.verbose:
+                    print(f"       [staleness decay: {decayed} concepts decayed]")
 
             if not self.loom.recent:
                 continue
@@ -339,13 +402,21 @@ class InferenceEngine:
             # Recursively check parent categories
             self._deep_inherit(category, relation, depth + 1, max_depth)
 
+    def _get_fact_confidence_score(self, subject: str, relation: str, obj: str) -> float:
+        if hasattr(self.loom, 'get_confidence'):
+            conf = self.loom.get_confidence(subject, relation, obj)
+            return CONFIDENCE_WEIGHTS.get(conf, 0.7)
+        return 0.7
+
     def transitive_chain(self, start: str, relation: str,
                          visited: set = None, depth: int = 0,
                          max_depth: int = 5) -> list:
         """
         Hypothetical Syllogism: If P->Q and Q->R, then P->R.
         Follows chains up to max_depth to avoid infinite loops.
-        Returns list of (target, depth) tuples.
+        Returns list of (target, depth, chain_confidence) tuples.
+
+        Chain confidence = product of premise confidences along the path.
         """
         if visited is None:
             visited = set()
@@ -358,12 +429,14 @@ class InferenceEngine:
         direct = self.loom.get(start, relation) or []
         for target in direct:
             if target not in visited:
-                reachable.append((target, depth + 1))
-                # Recurse to find indirect connections
+                link_score = self._get_fact_confidence_score(start, relation, target)
+                reachable.append((target, depth + 1, link_score))
                 indirect = self.transitive_chain(
                     target, relation, visited.copy(), depth + 1, max_depth
                 )
-                reachable.extend(indirect)
+                for ind_target, ind_depth, ind_conf in indirect:
+                    # Product of confidences along the chain
+                    reachable.append((ind_target, ind_depth, link_score * ind_conf))
 
         return reachable
 
@@ -386,32 +459,51 @@ class InferenceEngine:
                 self._check_chain_from(node, relation)
 
     def _check_chain_from(self, subject: str, relation: str):
-        """Check and record transitive inferences from a subject."""
+        """Check and record transitive inferences from a subject.
+
+        Only produces inferences where chain confidence >= MIN_CHAIN_CONFIDENCE.
+        """
         chain = self.transitive_chain(subject, relation)
         direct = self.loom.get(subject, relation) or []
 
-        for target, depth in chain:
+        best_per_target = {}
+        for target, depth, chain_conf in chain:
             if depth > 1 and target not in direct:
-                # Check if we already have this inference
-                existing = self.loom.get(subject, relation) or []
-                if target not in existing:
-                    # Build the chain of premises for provenance
-                    premises = self._build_chain_premises(subject, relation, target)
+                prev = best_per_target.get(target)
+                if prev is None or chain_conf > prev[1]:
+                    best_per_target[target] = (depth, chain_conf)
 
-                    provenance = self._create_provenance(
-                        source_type="inference",
-                        premises=premises,
-                        rule_id="transitive_chain"
-                    )
+        for target, (depth, chain_conf) in best_per_target.items():
+            # Skip chains below minimum confidence threshold
+            if chain_conf < MIN_CHAIN_CONFIDENCE:
+                if self.loom.verbose:
+                    subj_pretty = prettify_cause(subject)
+                    targ_pretty = prettify_effect(target)
+                    print(f"       [skipped chain: {subj_pretty} ~> {targ_pretty} "
+                          f"— confidence {chain_conf:.2f} < {MIN_CHAIN_CONFIDENCE}]")
+                continue
 
-                    self.inferences.append((subject, relation, target, depth))
-                    if self.loom.verbose:
-                        subj_pretty = prettify_cause(subject)
-                        targ_pretty = prettify_effect(target)
-                        print(f"       [inferred: {subj_pretty} ~> {targ_pretty}]")
-                    self.loom.add_fact(subject, relation, target,
-                                       confidence="medium", provenance=provenance)
-                    self.loom.copy_properties(subject, target)
+            existing = self.loom.get(subject, relation) or []
+            if target not in existing:
+                premises = self._build_chain_premises(subject, relation, target)
+
+                provenance = self._create_provenance(
+                    source_type="inference",
+                    premises=premises,
+                    rule_id="transitive_chain"
+                )
+
+                conf_label = "high" if chain_conf >= 0.9 else ("medium" if chain_conf >= 0.5 else "low")
+
+                self.inferences.append((subject, relation, target, depth))
+                if self.loom.verbose:
+                    subj_pretty = prettify_cause(subject)
+                    targ_pretty = prettify_effect(target)
+                    print(f"       [inferred: {subj_pretty} ~> {targ_pretty} "
+                          f"(chain confidence: {chain_conf:.2f}, {conf_label})]")
+                self.loom.add_fact(subject, relation, target,
+                                   confidence=conf_label, provenance=provenance)
+                self.loom.copy_properties(subject, target)
 
     def _build_chain_premises(self, start: str, relation: str, end: str) -> List[dict]:
         """

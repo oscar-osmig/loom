@@ -35,6 +35,47 @@ def _check_clarification_response(parser, t: str) -> str | None:
     return None
 
 
+def _build_correction_properties(retract_result: dict, corrector: str) -> dict:
+    """
+    Build correction provenance properties from a retract_fact result.
+
+    Extracts original speaker and value from the retracted fact, and
+    accumulates correction_history so the full chain is preserved across
+    multiple corrections.
+    """
+    from datetime import datetime, timezone
+
+    old_props = retract_result.get("old_properties", {})
+    old_object = retract_result.get("old_object")
+
+    # Who originally taught the fact (first teacher in the chain)
+    original_speaker = (
+        old_props.get("original_speaker_id")  # already part of a chain
+        or old_props.get("speaker_id")
+        or old_props.get("corrected_by")
+        or ""
+    )
+
+    # Build new correction history entry
+    history_entry = {
+        "corrected_by": corrector,
+        "original_value": old_object or "",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Carry forward existing correction_history (accumulate, don't overwrite)
+    existing_history = list(old_props.get("correction_history", []))
+    existing_history.append(history_entry)
+
+    return {
+        "source_type": "clarification",
+        "corrected_by": corrector,
+        "original_speaker_id": original_speaker,
+        "original_value": old_object or "",
+        "correction_history": existing_history,
+    }
+
+
 def _check_correction(parser, t: str) -> str | None:
     """
     Handle corrections: "no, that's wrong", "actually X is Y"
@@ -68,20 +109,32 @@ def _check_correction(parser, t: str) -> str | None:
             # Get what was previously said about this subject
             old_facts = parser.loom.get(subj, "is") or []
 
-            # Retract old conflicting facts
+            # Retract old conflicting facts, capturing metadata
+            corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
+            correction_props = None
             for old in old_facts:
                 if old != normalize(obj):
-                    parser.loom.retract_fact(subj, "is", old)
+                    retract_result = parser.loom.retract_fact(subj, "is", old)
                     parser.loom.context.add_correction(old, obj, "is")
+                    # Build provenance from the last retracted fact
+                    if retract_result.get("retracted"):
+                        correction_props = _build_correction_properties(
+                            retract_result, corrector
+                        )
 
-            # Add the corrected fact with attribution
-            corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
-            parser.loom.add_fact(subj, "is", obj, properties={
+            # Add the corrected fact with full provenance
+            props = correction_props or {
                 "source_type": "clarification",
                 "corrected_by": corrector,
-            })
+            }
+            parser.loom.add_fact(subj, "is", obj, properties=props)
+
             # Record the correction event
-            _record_correction(parser.loom, subj, "is", obj, corrector)
+            _record_correction(
+                parser.loom, subj, "is", obj, corrector,
+                original_speaker_id=props.get("original_speaker_id"),
+                original_value=props.get("original_value"),
+            )
             parser.loom.context.update(subject=subj, obj=obj)
             parser.last_subject = subj
 
@@ -95,12 +148,19 @@ def _check_correction(parser, t: str) -> str | None:
             action = parts[1].strip()
 
             corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
-            parser.loom.retract_fact(subj, "can", action)
-            parser.loom.add_fact(subj, "cannot", action, properties={
-                "source_type": "clarification",
-                "corrected_by": corrector,
-            })
-            _record_correction(parser.loom, subj, "cannot", action, corrector)
+            retract_result = parser.loom.retract_fact(subj, "can", action)
+
+            if retract_result.get("retracted"):
+                props = _build_correction_properties(retract_result, corrector)
+            else:
+                props = {"source_type": "clarification", "corrected_by": corrector}
+
+            parser.loom.add_fact(subj, "cannot", action, properties=props)
+            _record_correction(
+                parser.loom, subj, "cannot", action, corrector,
+                original_speaker_id=props.get("original_speaker_id"),
+                original_value=props.get("original_value"),
+            )
 
             return f"Corrected. {subj.title()} cannot {action}."
 
@@ -113,30 +173,43 @@ def _check_correction(parser, t: str) -> str | None:
             obj = parts[1].strip()
 
             corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
-            parser.loom.retract_fact(subj, "has", obj)
-            parser.loom.add_fact(subj, "has_not", obj, properties={
-                "source_type": "clarification",
-                "corrected_by": corrector,
-            })
-            _record_correction(parser.loom, subj, "has_not", obj, corrector)
+            retract_result = parser.loom.retract_fact(subj, "has", obj)
+
+            if retract_result.get("retracted"):
+                props = _build_correction_properties(retract_result, corrector)
+            else:
+                props = {"source_type": "clarification", "corrected_by": corrector}
+
+            parser.loom.add_fact(subj, "has_not", obj, properties=props)
+            _record_correction(
+                parser.loom, subj, "has_not", obj, corrector,
+                original_speaker_id=props.get("original_speaker_id"),
+                original_value=props.get("original_value"),
+            )
 
             return f"Corrected. {subj.title()} doesn't have {obj}."
 
     return None
 
 
-def _record_correction(loom, subject, relation, obj, corrector):
+def _record_correction(loom, subject, relation, obj, corrector,
+                       original_speaker_id=None, original_value=None):
     """Store a correction event in MongoDB for leaderboard tracking."""
     from datetime import datetime, timezone
     try:
-        loom.storage.db.corrections.insert_one({
+        doc = {
             "instance": loom.storage.instance_name,
             "subject": subject,
             "relation": relation,
             "object": obj,
             "corrected_by": corrector,
             "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if original_speaker_id:
+            doc["original_speaker_id"] = original_speaker_id
+        if original_value:
+            doc["original_value"] = original_value
+        loom.storage.db.corrections.insert_one(doc)
     except Exception:
         pass
 

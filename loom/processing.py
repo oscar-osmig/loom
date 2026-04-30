@@ -31,6 +31,8 @@ class HebbianMixin:
     def get_connection_weight(self: "Loom", subject: str, relation: str, obj: str) -> float:
         """Get the strength of a connection."""
         key = (normalize(subject), relation.lower(), normalize(obj))
+        if key in getattr(self, 'dormant_connections', set()):
+            return 0.0
         return self.connection_weights.get(key, INITIAL_WEIGHT)
 
     def _get_recent_avg_weight(self: "Loom", n: int = 20) -> float:
@@ -40,9 +42,27 @@ class HebbianMixin:
         """
         if not self.connection_times:
             return INITIAL_WEIGHT
-        recent = sorted(self.connection_times.items(), key=lambda x: x[1], reverse=True)[:n]
+        dormant = getattr(self, 'dormant_connections', set())
+        recent = sorted(
+            ((k, t) for k, t in self.connection_times.items() if k not in dormant),
+            key=lambda x: x[1], reverse=True
+        )[:n]
+        if not recent:
+            return INITIAL_WEIGHT
         weights = [self.connection_weights.get(key, INITIAL_WEIGHT) for key, _ in recent]
         return sum(weights) / len(weights)
+
+    def reactivate_connection(self: "Loom", key: Tuple[str, str, str]):
+        dormant = getattr(self, 'dormant_connections', None)
+        if dormant is None:
+            self.dormant_connections = set()
+            return
+        if key in dormant:
+            dormant.discard(key)
+            self.connection_weights[key] = INITIAL_WEIGHT
+            self.connection_times[key] = time.time()
+            if self.verbose:
+                print(f"       [reactivated connection: {key[0]} ~> {key[1]} ~> {key[2]}]")
 
     def strengthen_connection(self: "Loom", subject: str, relation: str, obj: str,
                               amount: float = STRENGTHENING_FACTOR):
@@ -52,6 +72,8 @@ class HebbianMixin:
         weak/new connections get boosted (LTP), preventing runaway dominant pathways.
         """
         key = (normalize(subject), relation.lower(), normalize(obj))
+        if key in getattr(self, 'dormant_connections', set()):
+            self.reactivate_connection(key)
         current = self.connection_weights.get(key, INITIAL_WEIGHT)
 
         # BCM sliding threshold based on recent activity
@@ -72,15 +94,19 @@ class HebbianMixin:
                           amount: float = DECAY_FACTOR):
         """Weaken a connection (decay from disuse)."""
         key = (normalize(subject), relation.lower(), normalize(obj))
+        if key in getattr(self, 'dormant_connections', set()):
+            return
         current = self.connection_weights.get(key, INITIAL_WEIGHT)
         new_weight = max(current - amount, MIN_WEIGHT)
 
         if new_weight <= MIN_WEIGHT:
-            # Prune very weak connections
             if key in self.connection_weights:
-                del self.connection_weights[key]
+                self.connection_weights[key] = MIN_WEIGHT
+                if not hasattr(self, 'dormant_connections'):
+                    self.dormant_connections = set()
+                self.dormant_connections.add(key)
                 if self.verbose:
-                    print(f"       [pruned: {subject} ~> {relation} ~> {obj}]")
+                    print(f"       [dormant: {subject} ~> {relation} ~> {obj}]")
         else:
             self.connection_weights[key] = new_weight
 
@@ -103,8 +129,11 @@ class HebbianMixin:
 
     def get_strong_connections(self: "Loom", threshold: float = 2.0) -> List[Tuple[str, str, str, float]]:
         """Get connections above a strength threshold."""
+        dormant = getattr(self, 'dormant_connections', set())
         strong = []
         for key, weight in self.connection_weights.items():
+            if key in dormant:
+                continue
             if weight >= threshold:
                 subject, relation, obj = key
                 strong.append((subject, relation, obj, weight))
@@ -168,6 +197,12 @@ class ProcessingMixin:
 
         # Extract entities from the text (simplified - parser should provide these)
         entities = self._extract_entities(text)
+
+        # Track access for concept reinforcement on known entities
+        for entity in entities:
+            normalized = normalize(entity)
+            if normalized in self.knowledge:
+                self._track_access(normalized)
 
         # Process through activation network
         coactivated = self.activation.process_input(

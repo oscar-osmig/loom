@@ -550,7 +550,7 @@ def get_analogies(concept):
 
 
 def get_neuron_info(node):
-    """Get information about a specific neuron."""
+    """Get information about a specific neuron, including provenance and correction history."""
     from loom.normalizer import normalize
     node_norm = normalize(node)
 
@@ -564,7 +564,36 @@ def get_neuron_info(node):
         for target in targets:
             weight = loom.get_connection_weight(node_norm, rel, target)
             weight_str = f" ({weight:.1f})" if weight > 1.0 else ""
-            lines.append(f"• —[{rel}]→ {target}{weight_str}")
+
+            # Fetch provenance metadata for this fact
+            meta = loom.get_fact_metadata(node_norm, rel, target)
+            prov_parts = []
+            if meta:
+                props = meta.get("properties", {})
+                source_type = props.get("source_type", "")
+                speaker = props.get("speaker_id", "")
+                corrected_by = props.get("corrected_by", "")
+                if speaker:
+                    prov_parts.append(f"by {speaker}")
+                if source_type and source_type != "user":
+                    prov_parts.append(f"[{source_type}]")
+                if corrected_by:
+                    prov_parts.append(f"corrected by {corrected_by}")
+
+            prov_str = f" — {', '.join(prov_parts)}" if prov_parts else ""
+            lines.append(f"• —[{rel}]→ {target}{weight_str}{prov_str}")
+
+    # Append correction summary if any corrections exist for this concept
+    try:
+        correction_count = loom.storage.db.corrections.count_documents({
+            "instance": loom.storage.instance_name,
+            "subject": node_norm,
+        })
+        if correction_count > 0:
+            lines.append("")
+            lines.append(f"<b>Corrections:</b> {correction_count} correction(s) recorded")
+    except Exception:
+        pass
 
     return "\n".join(lines)
 
@@ -926,6 +955,29 @@ def get_graph():
         })
         node_ids.add(node_id)
 
+    # Pre-fetch provenance data for all facts (source_type, speaker_id, corrected_by)
+    fact_provenance = {}
+    try:
+        prov_cursor = loom.storage.db.facts.find(
+            {"instance": loom.storage.instance_name},
+            {"subject": 1, "relation": 1, "object": 1,
+             "properties.source_type": 1, "properties.speaker_id": 1,
+             "properties.corrected_by": 1, "properties.original_value": 1,
+             "properties.correction_history": 1, "_id": 0}
+        )
+        for doc in prov_cursor:
+            key = (doc["subject"], doc["relation"], doc["object"])
+            props = doc.get("properties", {})
+            fact_provenance[key] = {
+                "source_type": props.get("source_type", "user"),
+                "taught_by": props.get("speaker_id", ""),
+                "corrected_by": props.get("corrected_by", ""),
+                "original_value": props.get("original_value", ""),
+                "correction_count": len(props.get("correction_history", [])),
+            }
+    except Exception:
+        pass
+
     # Create edges from relations (all targets now have nodes)
     # Pre-fetch all connection weights for fast lookup
     weights = loom.connection_weights
@@ -936,12 +988,23 @@ def get_graph():
             for target in targets:
                 key = (source_id, relation, target)
                 weight = weights.get(key, 1.0)
-                edges.append({
+                prov = fact_provenance.get(key, {})
+                edge = {
                     'source': source_id,
                     'target': target,
                     'relation': relation,
-                    'weight': weight
-                })
+                    'weight': weight,
+                }
+                # Include provenance fields when present
+                if prov.get("taught_by"):
+                    edge['taught_by'] = prov['taught_by']
+                if prov.get("source_type") and prov['source_type'] != "user":
+                    edge['source_type'] = prov['source_type']
+                if prov.get("corrected_by"):
+                    edge['corrected_by'] = prov['corrected_by']
+                    edge['original_value'] = prov.get('original_value', '')
+                    edge['correction_count'] = prov.get('correction_count', 0)
+                edges.append(edge)
 
     # Get discovery data
     co_occurrences = []
@@ -1003,6 +1066,78 @@ def get_graph():
         'missing_properties': missing_properties,
         'lonely_neurons': discovery_data.get('lonely_neurons', []),
         'statistics': discovery_data.get('statistics', {})
+    })
+
+
+@app.route('/api/corrections/<concept>', methods=['GET'])
+def get_corrections(concept):
+    """
+    Get all corrections related to a concept.
+
+    Returns JSON array of correction events from the corrections collection
+    and from fact properties that contain correction_history.
+    """
+    from loom.normalizer import normalize
+    concept_norm = normalize(concept)
+    inst = loom.storage.instance_name
+
+    corrections = []
+
+    try:
+        # 1. Query the corrections collection for events involving this concept
+        cursor = loom.storage.db.corrections.find(
+            {"instance": inst, "subject": concept_norm},
+            {"_id": 0, "instance": 0}
+        ).sort("created_at", -1)
+
+        for doc in cursor:
+            corrections.append({
+                "concept": doc.get("subject", concept_norm),
+                "relation": doc.get("relation", ""),
+                "new_value": doc.get("object", ""),
+                "old_value": doc.get("original_value", ""),
+                "corrected_by": doc.get("corrected_by", ""),
+                "original_speaker_id": doc.get("original_speaker_id", ""),
+                "timestamp": doc.get("created_at", ""),
+            })
+
+        # 2. Also check facts that have inline correction_history in properties
+        fact_cursor = loom.storage.db.facts.find(
+            {"instance": inst, "subject": concept_norm,
+             "properties.correction_history": {"$exists": True, "$ne": []}},
+            {"subject": 1, "relation": 1, "object": 1,
+             "properties.correction_history": 1,
+             "properties.original_speaker_id": 1, "_id": 0}
+        )
+
+        # Collect correction_history entries that aren't already in corrections list
+        seen_timestamps = {c["timestamp"] for c in corrections if c.get("timestamp")}
+        for doc in fact_cursor:
+            props = doc.get("properties", {})
+            for entry in props.get("correction_history", []):
+                ts = entry.get("timestamp", "")
+                if ts and ts not in seen_timestamps:
+                    corrections.append({
+                        "concept": doc.get("subject", concept_norm),
+                        "relation": doc.get("relation", ""),
+                        "new_value": doc.get("object", ""),
+                        "old_value": entry.get("original_value", ""),
+                        "corrected_by": entry.get("corrected_by", ""),
+                        "original_speaker_id": props.get("original_speaker_id", ""),
+                        "timestamp": ts,
+                    })
+                    seen_timestamps.add(ts)
+
+        # Sort by timestamp descending (most recent first)
+        corrections.sort(key=lambda c: c.get("timestamp", ""), reverse=True)
+
+    except Exception as e:
+        return jsonify({"error": str(e), "corrections": []}), 500
+
+    return jsonify({
+        "concept": concept_norm,
+        "total": len(corrections),
+        "corrections": corrections,
     })
 
 

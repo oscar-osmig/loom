@@ -165,7 +165,7 @@
         border: 1px solid var(--border);
         color: var(--text-muted);
         cursor: pointer;
-        padding: 0.35rem 0.6rem;
+        padding: 0.5rem 0.6rem;
         border-radius: 8px;
         transition: all 0.2s;
         display: flex;

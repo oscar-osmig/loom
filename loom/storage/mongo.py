@@ -413,13 +413,22 @@ class MongoStorage:
                     })
                     result["cascaded_facts"].extend(sub_result["cascaded_facts"])
 
-        # Now delete the actual fact
-        delete_result = self.db.facts.delete_one({
+        # Fetch the fact before deleting so we can return its metadata
+        query = {
             "instance": self.instance_name,
             "subject": subject,
             "relation": relation,
             "object": obj
-        })
+        }
+        existing_doc = self.db.facts.find_one(query)
+        if existing_doc:
+            existing_doc = self._normalize_fact(existing_doc)
+            result["old_properties"] = existing_doc.get("properties", {})
+            result["old_context"] = existing_doc.get("context", DEFAULT_CONTEXT)
+            result["old_object"] = existing_doc.get("object")
+
+        # Now delete the actual fact
+        delete_result = self.db.facts.delete_one(query)
         result["retracted"] = delete_result.deleted_count > 0
 
         return result

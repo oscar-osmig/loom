@@ -17,6 +17,50 @@ from .normalizer import normalize
 if TYPE_CHECKING:
     from .brain import Loom
 
+INSUFFICIENT_KNOWLEDGE_THRESHOLD = 2
+
+_IDK_TEMPLATES = [
+    "I don't know enough about {topic} yet. Could you teach me?",
+    "I haven't learned much about {topic}. Tell me something about it?",
+    "I don't have enough information on {topic} right now. What can you share?",
+    "I'm not sure about {topic} — I'd love to learn more if you can teach me.",
+]
+
+CONFIDENCE_SCORE = {"high": 1.0, "medium": 0.6, "low": 0.3}
+
+
+def _check_knowledge_sufficiency(subject: str, facts: dict) -> bool:
+    """
+    Return True if we know enough about the subject to compose a real answer.
+
+    Insufficient only when ALL facts are low confidence.
+    Any high/medium confidence fact (explicitly taught) is always sufficient.
+    """
+    direct = facts.get("direct", {})
+    inherited = facts.get("inherited", {})
+    confidence = facts.get("confidence", {})
+
+    total_count = sum(len(v) for v in direct.values()) + sum(len(v) for v in inherited.values())
+
+    if total_count == 0:
+        return False
+
+    # Any high or medium confidence fact = sufficient knowledge
+    for rel, objects in direct.items():
+        for obj in objects:
+            conf = confidence.get((rel, obj), "high")
+            if conf != "low":
+                return True
+
+    for rel, objects in inherited.items():
+        for obj in objects:
+            conf = confidence.get((rel, obj), "low")
+            if conf != "low":
+                return True
+
+    # All facts are low confidence — insufficient
+    return False
+
 
 def _pick_template(loom: Optional["Loom"], seed: int, templates: list, labels: list = None):
     """
@@ -328,6 +372,10 @@ def compose_response(loom: "Loom", question_type: str, concept: str,
 
     if not direct and not inherited:
         return None
+
+    if not _check_knowledge_sufficiency(subj, facts):
+        seed = int(hashlib.md5(subj.encode()).hexdigest()[:8], 16)
+        return _IDK_TEMPLATES[seed % len(_IDK_TEMPLATES)].format(topic=subj)
 
     # Route to specific composer based on question type
     if question_type == "what_is":

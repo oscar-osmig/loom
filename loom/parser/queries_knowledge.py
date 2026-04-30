@@ -551,10 +551,25 @@ def _check_what_query(parser, t: str) -> str | None:
     # This takes priority because users usually ask "what are X?" to learn ABOUT X
     facts, subj = try_with_fallback("is")
 
-    # Also check has_instance (reverse of is): "what is the dish of X?" -> find what has_instance
-    # e.g., dish_valdoria --has_instance--> spiced_fish means spiced_fish IS the dish of valdoria
-    # Only use this for multi-word "X of Y" patterns where the direct lookup failed.
-    if not facts and "of" in subj.split():
+    # "what is the X of Y?" — reverse property+instance lookup
+    # e.g., "what is the capital of france?" → find entity with has_property=capital AND is=france
+    if not facts and " of " in subj:
+        parts = subj.split(" of ", 1)
+        prop_part = parts[0].strip().lstrip("the ").strip()
+        entity_part = parts[1].strip()
+        prop_norm = normalize(prop_part)
+        entity_norm = normalize(entity_part)
+
+        # Search: find entities that have_property=prop AND (is=entity OR related to entity)
+        for node, relations in parser.loom.knowledge.items():
+            has_props = relations.get("has_property", [])
+            is_rels = relations.get("is", [])
+            if prop_norm in [normalize(p) for p in has_props]:
+                if entity_norm in [normalize(r) for r in is_rels]:
+                    display = prettify(node)
+                    return f"{display.title()} is the {prop_part} of {prettify(entity_part)}."
+
+        # Fallback: check has_instance on entity
         instances, subj_matched = try_with_fallback("has_instance")
         if instances:
             verb = "are" if is_plural(subj_matched) else "is"

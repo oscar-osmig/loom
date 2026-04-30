@@ -300,6 +300,17 @@ class JSONFallbackStorage:
                     })
                     result["cascaded_facts"].extend(sub_result["cascaded_facts"])
 
+        # Fetch the fact before deleting so we can return its metadata
+        for f in self._data["facts"]:
+            if (f["subject"] == subject and
+                    f["relation"] == relation and
+                    f["object"] == obj):
+                normalized = self._normalize_fact(dict(f))
+                result["old_properties"] = normalized.get("properties", {})
+                result["old_context"] = normalized.get("context", "general")
+                result["old_object"] = normalized.get("object")
+                break
+
         # Now delete the actual fact
         original_len = len(self._data["facts"])
         self._data["facts"] = [
