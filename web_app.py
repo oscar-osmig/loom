@@ -3,6 +3,9 @@ Loom Web Interface - Flask Backend
 A minimalistic chat interface for Loom.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, request, jsonify, send_file
 import json
 import os
@@ -196,6 +199,15 @@ def chat():
     # Tag all facts with the current user
     if user:
         loom._session_speaker_id = user
+        # Track message count for leaderboard
+        try:
+            loom.storage.db.user_stats.update_one(
+                {"instance": loom.storage.instance_name, "user": user},
+                {"$inc": {"message_count": 1}, "$set": {"last_active": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()}},
+                upsert=True,
+            )
+        except Exception:
+            pass
 
     # Commands require / prefix
     if message.startswith('/'):
@@ -215,6 +227,18 @@ def chat():
         elif cmd == 'about':
             return jsonify({'response': 'open_about', 'type': 'about'})
 
+        elif cmd == 'procedures':
+            procs = loom.storage.get_all_procedures()
+            if not procs:
+                return jsonify({'response': 'No procedures stored yet. Teach me steps like "first boil water, then add pasta, finally drain it."', 'type': 'response'})
+            lines = ["<b>Stored Procedures</b>\n"]
+            for name, steps in procs.items():
+                lines.append(f"<b>{name}</b>")
+                for i, step in enumerate(steps, 1):
+                    lines.append(f"  {i}. {step}")
+                lines.append("")
+            return jsonify({'response': '\n'.join(lines), 'type': 'info'})
+
         elif cmd == 'show':
             return jsonify({'response': get_knowledge_summary(), 'type': 'info'})
 
@@ -230,8 +254,17 @@ def chat():
         elif cmd == 'forget-all':
             if not is_admin(email):
                 return jsonify({'response': 'Permission denied. Only admins can erase all memory.', 'type': 'error'})
-            loom.forget_all()
-            return jsonify({'response': 'All memory erased. Starting fresh.', 'type': 'info'})
+            try:
+                # Count what exists before wiping
+                facts_before = loom.storage.get_fact_count()
+                loom.forget_all()
+                facts_after = loom.storage.get_fact_count()
+                return jsonify({
+                    'response': f'All memory erased. Removed {facts_before} facts, rebuilt {facts_after} system neurons. Starting fresh.',
+                    'type': 'info'
+                })
+            except Exception as e:
+                return jsonify({'response': f'Error during forget-all: {e}', 'type': 'error'})
 
         elif cmd == 'forget':
             if user:
@@ -399,46 +432,41 @@ Unlike statistical or vector-based AI, Loom relies on explicit symbolic represen
 
 def get_help_text(admin=False):
     """Return help text, filtering commands by role."""
-    text = """<b>How Loom Works</b>
-Loom learns by creating neurons (concepts) and synapses (connections) from your statements.
+    text = """<b>Loom — Community Knowledge System</b>
+A knowledge system built from what people teach it. Every fact is transparent, attributed, and open to revision.
 
-<b>Teaching</b>
-• "dogs are animals" - categories
-• "birds can fly" - abilities
-• "rain causes floods" - causation
-• "cats have fur" - properties
+<b>Contribute</b>
+• "dogs are mammals" — teach a fact
+• "no, that's wrong" — correct a mistake
+• "actually, cats are felines" — update knowledge
+• Paste paragraphs — Loom extracts knowledge automatically
 
-<b>Asking</b>
-• "what are dogs?" - categories
-• "can birds fly?" - abilities
-• "tell me about X" - full description
-• "where do X live?" - locations
+<b>Ask</b>
+• "what are dogs?" — query categories
+• "tell me about elephants" — full description
+• "where do fish live?" — locations
+• "can birds fly?" — abilities
 
-<b>Commands</b> (require / prefix)
-• /about - what is Loom?
-• /help - show this help
-• /visualize - open the neural graph
-• /clear - clear chat history
-• /forget - erase your own facts"""
+<b>Commands</b> (use / prefix)
+• /about — what is Loom + how to contribute
+• /help — this help
+• /visualize — explore the knowledge graph
+• /clear — clear chat history
+• /forget — erase your own facts"""
 
     if admin:
         text += """
 
-<b>Admin Commands</b>
-• /show - view knowledge summary
-• /stats - storage statistics
-• /style - writing style analytics
-• /neuron X - inspect concept X
-• /frame X - show concept frame
-• /bridges [X] - show attribute bridges
-• /clusters - show emergent clusters
-• /activation - show activation state
-• /weights - show strong connections
-• /analogies X - find similar concepts
-• /forget-all - erase all memory
-• /train [pack] - load training pack
-• /load [file] - load from file
-• /load-all - load all files from training/"""
+<b>Admin</b>
+• /show — knowledge summary
+• /stats — storage statistics
+• /style — writing style analytics
+• /load-all — load all training files
+• /neuron X — inspect concept
+• /frame X — concept frame
+• /clusters — emergent clusters
+• /analogies X — find similar concepts
+• /forget-all — erase all memory"""
 
     return text
 
@@ -634,6 +662,81 @@ def check_nickname():
         return jsonify({'available': True})
 
 
+@app.route('/api/collaborators', methods=['GET'])
+def get_collaborators():
+    """Aggregate user contributions: neurons created, corrections, messages."""
+    inst = loom.storage.instance_name
+
+    try:
+        # Neurons created per user (from facts.properties.speaker_id)
+        neurons_pipeline = [
+            {"$match": {"instance": inst, "properties.speaker_id": {"$exists": True, "$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$properties.speaker_id", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 50},
+        ]
+        neurons_by_user = {doc["_id"]: doc["count"] for doc in loom.storage.db.facts.aggregate(neurons_pipeline)}
+
+        # Corrections per user
+        corrections_pipeline = [
+            {"$match": {"instance": inst, "corrected_by": {"$exists": True, "$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$corrected_by", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 50},
+        ]
+        corrections_by_user = {doc["_id"]: doc["count"] for doc in loom.storage.db.corrections.aggregate(corrections_pipeline)}
+
+        # Messages per user
+        messages_by_user = {}
+        for doc in loom.storage.db.user_stats.find({"instance": inst}):
+            messages_by_user[doc["user"]] = doc.get("message_count", 0)
+
+        # Admin detection
+        admin_email = os.environ.get('ADMIN_EMAIL', '').lower()
+        # Also collect admin names from user_stats where we can store email
+        admin_names = set()
+        if admin_email:
+            admin_names.add(admin_email)
+            admin_names.add(admin_email.split('@')[0])
+            admin_names.add(admin_email.split('@')[0].replace('.', ' '))
+            admin_names.add(admin_email.split('@')[0].replace('.', ''))
+        # Caller can pass their email to tag themselves
+        caller_email = request.args.get('email', '').lower()
+        caller_user = request.args.get('user', '')
+        if caller_email and is_admin(caller_email) and caller_user:
+            admin_names.add(caller_user.lower())
+
+        # Merge all users (filter out None/empty)
+        all_users = set(neurons_by_user.keys()) | set(corrections_by_user.keys()) | set(messages_by_user.keys())
+        all_users = {u for u in all_users if u}  # remove None and ""
+
+        collaborators = []
+        for u in all_users:
+            # Check admin
+            user_is_admin = u.lower() in admin_names if admin_names else False
+            collaborators.append({
+                "user": u,
+                "neurons": neurons_by_user.get(u, 0),
+                "corrections": corrections_by_user.get(u, 0),
+                "messages": messages_by_user.get(u, 0),
+                "is_admin": user_is_admin,
+            })
+
+        # Sorted lists
+        by_neurons = sorted(collaborators, key=lambda x: x["neurons"], reverse=True)
+        by_corrections = sorted(collaborators, key=lambda x: x["corrections"], reverse=True)
+        by_messages = sorted(collaborators, key=lambda x: x["messages"], reverse=True)
+
+        return jsonify({
+            "total_collaborators": len(all_users),
+            "by_neurons": by_neurons[:20],
+            "by_corrections": by_corrections[:20],
+            "by_messages": by_messages[:20],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "total_collaborators": 0, "by_neurons": [], "by_corrections": [], "by_messages": []})
+
+
 @app.route('/api/style', methods=['GET'])
 def get_style():
     """Return what Loom has learned about writing style. Admin only."""
@@ -666,6 +769,42 @@ def get_style():
     }
 
     return jsonify({'stats': stats, 'patterns': patterns})
+
+
+@app.route('/api/response-edit', methods=['POST'])
+def record_response_edit():
+    """Store a user-edited version of Loom's response for style learning."""
+    from datetime import datetime, timezone
+    data = request.json or {}
+    original = (data.get('original_response') or '').strip()
+    edited = (data.get('edited_response') or '').strip()
+
+    if not edited or not original:
+        return jsonify({'error': 'Both original and edited text required'}), 400
+    if edited == original:
+        return jsonify({'ok': True, 'changed': False})
+
+    doc = {
+        'instance': loom.storage.instance_name,
+        'message_id': data.get('message_id'),
+        'original': original[:2000],
+        'edited': edited[:2000],
+        'user': data.get('user', ''),
+        'input_text': (data.get('input_text') or '')[:500],
+        'created_at': datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        loom.storage.db.response_edits.insert_one(doc)
+        # Also record as negative feedback for the original style
+        if hasattr(loom, 'style_learner'):
+            loom.style_learner.record(
+                input_text=doc['input_text'],
+                response_text=original,
+                rating='dislike',
+            )
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'changed': True})
 
 
 @app.route('/api/feedback', methods=['POST'])
@@ -741,6 +880,18 @@ def get_graph():
     except Exception:
         pass
 
+    # Collect correctors per node from corrections collection
+    node_correctors = {}
+    try:
+        corr_pipeline = [
+            {"$match": {"instance": loom.storage.instance_name, "corrected_by": {"$exists": True, "$ne": ""}}},
+            {"$group": {"_id": "$subject", "correctors": {"$addToSet": "$corrected_by"}}}
+        ]
+        for doc in loom.storage.db.corrections.aggregate(corr_pipeline):
+            node_correctors[doc["_id"]] = set(doc["correctors"])
+    except Exception:
+        pass
+
     # Collect ALL node ids first (subjects + all targets they reference)
     all_node_ids = set()
     for node_id, relations in knowledge.items():
@@ -763,13 +914,15 @@ def get_graph():
         incoming = incoming_counts.get(node_id, 0)
 
         creators = list(node_creators.get(node_id, []))
+        correctors = list(node_correctors.get(node_id, []))
         nodes.append({
             'id': node_id,
             'label': node_id.replace('_', ' ').title(),
             'connections': outgoing + incoming,
             'is_lonely': node_id in lonely_node_ids,
             'is_system': node_id == 'loom',
-            'creators': creators
+            'creators': creators,
+            'correctors': correctors,
         })
         node_ids.add(node_id)
 

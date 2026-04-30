@@ -1,5 +1,5 @@
 <script>
-    import { fileStore, selectFile } from '../stores/files.svelte.js';
+    import { fileStore, selectFile, closeFileList } from '../stores/files.svelte.js';
 
     function handleClick(name) {
         selectFile(name);
@@ -8,7 +8,15 @@
 
 {#if fileStore.items.length > 0}
     <div class="file-sidebar">
-        <div class="sidebar-title">Files</div>
+        <div class="sidebar-header">
+            <div class="sidebar-title">Files</div>
+            <button class="close-btn" onclick={closeFileList} title="Close file list">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
         <div class="file-list">
             {#each fileStore.items as file (file.name)}
                 <button
@@ -30,12 +38,26 @@
 
 <style>
     .file-sidebar {
+        position: absolute;
+        top: 0;
+        right: 0;
         width: 160px;
-        flex-shrink: 0;
-        border-left: 1px solid var(--border);
+        max-height: 100%;
+        z-index: 6;
         display: flex;
         flex-direction: column;
         overflow: hidden;
+        background: var(--bg-secondary);
+        border-left: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        border-bottom-left-radius: 10px;
+    }
+
+    .sidebar-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 0.75rem 0.5rem;
     }
 
     .sidebar-title {
@@ -44,7 +66,23 @@
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        padding: 0.75rem 0.75rem 0.5rem;
+    }
+
+    .close-btn {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 0.2rem;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        transition: all 0.15s;
+    }
+
+    .close-btn:hover {
+        color: var(--text-primary);
+        background: var(--bg-tertiary);
     }
 
     .file-list {

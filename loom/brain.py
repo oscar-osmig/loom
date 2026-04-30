@@ -270,27 +270,61 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
     def set_conversation(self, conversation_id: str) -> None:
         """
         Switch to a specific conversation's context.
-        Creates a new ConversationContext if this conversation is new.
-        Also evicts old contexts (older than 2 hours of inactivity).
+        Creates/restores a ConversationContext for this conversation.
+        Evicts old contexts and saves them to MongoDB.
         """
         import time
         if not conversation_id:
             conversation_id = "_default"
+
         if conversation_id not in self._context_pool:
-            ctx = ConversationContext(conversation_id=conversation_id)
+            # Try to restore from MongoDB first
+            ctx = None
+            try:
+                doc = self.storage.db.conversations.find_one({
+                    "instance": self.storage.instance_name,
+                    "conversation_id": conversation_id,
+                })
+                if doc and doc.get("snapshot"):
+                    ctx = ConversationContext.from_snapshot(doc["snapshot"])
+            except Exception:
+                pass
+
+            if not ctx:
+                ctx = ConversationContext(conversation_id=conversation_id)
             ctx.set_knowledge_ref(self.knowledge)
             self._context_pool[conversation_id] = ctx
+
         self._context_pool[conversation_id].last_active = time.time()
         self._current_conversation_id = conversation_id
 
-        # Opportunistic eviction: drop contexts idle > 2 hours, keep default
+        # Opportunistic eviction: save + drop contexts idle > 2 hours
         now = time.time()
         stale_cutoff = now - 2 * 3600
         for cid in list(self._context_pool.keys()):
             if cid == "_default" or cid == conversation_id:
                 continue
             if self._context_pool[cid].last_active < stale_cutoff:
+                self._save_conversation(cid)
                 del self._context_pool[cid]
+
+    def _save_conversation(self, conversation_id: str) -> None:
+        """Persist a conversation context to MongoDB."""
+        ctx = self._context_pool.get(conversation_id)
+        if not ctx or conversation_id == "_default":
+            return
+        try:
+            self.storage.db.conversations.update_one(
+                {"instance": self.storage.instance_name, "conversation_id": conversation_id},
+                {"$set": {
+                    "snapshot": ctx.to_snapshot(),
+                    "updated_at": __import__('datetime').datetime.now(
+                        __import__('datetime').timezone.utc).isoformat(),
+                }},
+                upsert=True,
+            )
+        except Exception:
+            pass
 
     def _is_valid_entity(self, name: str) -> bool:
         """Check if an entity name is valid (not polluted/malformed)."""
@@ -1177,16 +1211,35 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         print("  +-----------------------------------------------+\n")
 
     def forget_all(self):
-        """Clear all knowledge from storage."""
+        """Clear all knowledge from storage and rebuild only Loom's self-knowledge."""
+        # Pause background inference to prevent re-deriving facts during reset
+        inference_was_running = False
+        if hasattr(self, 'inference') and self.inference.running:
+            inference_was_running = True
+            self.inference.running = False
+
+        # Wipe all stored data
         self.storage.forget_all()
         self._invalidate_cache()
+        self._knowledge_cache = None
+
+        # Clear all in-memory state
         self.conflicts = []
         self.recent = []
+
         if hasattr(self, 'inference'):
             self.inference.inferences = []
-            self.storage.clear_inferences()
-        if hasattr(self, 'context'):
-            self.context = ConversationContext()
+            self.inference._recent_inferences = set()
+            try:
+                self.storage.clear_inferences()
+            except Exception:
+                pass
+
+        # Reset ALL conversation contexts (not just current)
+        self._context_pool.clear()
+        self._context_pool["_default"] = ConversationContext(conversation_id="_default")
+        self._current_conversation_id = "_default"
+
         if hasattr(self, 'frame_manager'):
             self.frame_manager.reset()
         if hasattr(self, 'discovery_engine'):
@@ -1221,8 +1274,14 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             self.rule_memory._rule_counter = 0
         if hasattr(self, 'style_learner'):
             self.style_learner._cache_templates = None
+
         # Re-add loom self-knowledge only
         self._init_loom_knowledge()
+        self._invalidate_cache()
+
+        # Resume background inference
+        if inference_was_running and hasattr(self, 'inference'):
+            self.inference.running = True
 
     def show_conflicts(self):
         """Display detected conflicts."""

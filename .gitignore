@@ -30,3 +30,9 @@ notes.txt
 
 /training
 /issues
+WHERE_WE_LEFT_OFF.md
+superskills/.claude/superpowers-config.json
+.superpowers/
+claude-usage/__pycache__/
+superskills
+claude-usage*.db

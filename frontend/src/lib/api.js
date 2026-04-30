@@ -76,6 +76,21 @@ export async function uploadTrainingBatch(files, user) {
 }
 
 /**
+ * GET /api/collaborators
+ */
+export async function fetchCollaborators(user, email) {
+    try {
+        const params = new URLSearchParams();
+        if (user) params.set('user', user);
+        if (email) params.set('email', email);
+        const res = await fetch(`${BASE}/api/collaborators?${params}`);
+        return await res.json();
+    } catch (err) {
+        return { error: err.message, total_collaborators: 0, by_neurons: [], by_corrections: [], by_messages: [] };
+    }
+}
+
+/**
  * GET /api/style
  * Returns what Loom has learned about writing style.
  */
@@ -95,6 +110,23 @@ export async function fetchStyle(email) {
 export async function sendFeedback(payload) {
     try {
         const res = await fetch(`${BASE}/api/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        return await res.json();
+    } catch (err) {
+        return { error: err.message };
+    }
+}
+
+/**
+ * POST /api/response-edit
+ * Submits a user-edited version of Loom's response so Loom can learn better phrasing.
+ */
+export async function submitResponseEdit(payload) {
+    try {
+        const res = await fetch(`${BASE}/api/response-edit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)

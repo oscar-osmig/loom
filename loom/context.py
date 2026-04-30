@@ -347,6 +347,36 @@ class ConversationContext:
             "recent_count": len(self.recent_statements)
         }
 
+    def to_snapshot(self) -> dict:
+        """Serialize context state for persistence."""
+        return {
+            "conversation_id": self.conversation_id,
+            "current_topic": self.current_topic,
+            "topic_stack": list(self.topic_stack),
+            "last_subject": self.last_subject,
+            "last_object": self.last_object,
+            "last_relation": self.last_relation,
+            "recent_statements": list(self.recent_statements),
+            "mode": self.mode,
+            "current_turn": self.current_turn,
+        }
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "ConversationContext":
+        """Restore context from a persisted snapshot."""
+        ctx = cls(conversation_id=data.get("conversation_id"))
+        ctx.current_topic = data.get("current_topic")
+        ctx.last_subject = data.get("last_subject")
+        ctx.last_object = data.get("last_object")
+        ctx.last_relation = data.get("last_relation")
+        ctx.mode = data.get("mode", "normal")
+        ctx.current_turn = data.get("current_turn", 0)
+        for stmt in data.get("recent_statements", []):
+            ctx.recent_statements.append(stmt)
+        for topic in data.get("topic_stack", []):
+            ctx.topic_stack.append(topic)
+        return ctx
+
     def set_clarification(self, question: str, about: str):
         """Set a pending clarification request."""
         self.pending_clarification = {

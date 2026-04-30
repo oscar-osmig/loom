@@ -16,6 +16,7 @@ export const fileStore = $state({
     items: load(),       // [{ name, content, uploadedAt }]
     activeFile: null,    // name of file being viewed
     editing: false,
+    listOpen: true,      // whether file sidebar is visible
 });
 
 export function addFile(name, content) {
@@ -62,4 +63,12 @@ export function deselectFile() {
 
 export function setEditing(value) {
     fileStore.editing = value;
+}
+
+export function toggleFileList() {
+    fileStore.listOpen = !fileStore.listOpen;
+}
+
+export function closeFileList() {
+    fileStore.listOpen = false;
 }

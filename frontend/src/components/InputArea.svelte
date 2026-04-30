@@ -1,6 +1,6 @@
 <script>
     import { auth, isAuthenticated, setUser } from '../stores/auth.svelte.js';
-    import { addMessage, setTyping, conversationId } from '../stores/chat.svelte.js';
+    import { addMessage, setTyping, clearMessages, conversationId } from '../stores/chat.svelte.js';
     import { showInfoPanel, setHeaderLocked, setStylePageOpen, setVizOpen, setAboutOpen, showLoadResults } from '../stores/ui.svelte.js';
     import { showSpinner, hideSpinner } from '../stores/training.svelte.js';
     import { showToast } from '../stores/toast.svelte.js';
@@ -81,6 +81,10 @@
                          (msgLower.startsWith('/') && cmdMessage.startsWith('train '));
         }
 
+        // Detect forget commands
+        const isForget = msgLower.startsWith('/') &&
+            (cmdMessage === 'forget-all' || cmdMessage === 'forget');
+
         // Add user message to chat
         addMessage(escapeHtml(message), 'user');
 
@@ -108,6 +112,13 @@
             }
 
             const responseType = data.type || 'response';
+
+            // Forget commands: clear chat and show confirmation inline
+            if (isForget && responseType === 'info') {
+                clearMessages();
+                addMessage(data.response, 'info');
+                return;
+            }
 
             // Route help and info to the info panel, style to style page
             if (responseType === 'help' || responseType === 'info') {

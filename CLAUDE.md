@@ -4,9 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Loom (v0.6) is a symbolic knowledge system that learns through natural language dialogue. It creates neurons (concepts) and synapses (connections) from conversation, inspired by Hebbian learning and biological neural plasticity. No ML frameworks, embeddings, or mathematical optimization - pure symbolic reasoning.
+Loom (v0.8-dev) is a community-built symbolic knowledge system that learns from what people teach it through natural conversation. Every fact is transparent, attributed, and open to revision — closer to a conversational Wikipedia than a black-box model.
 
-**New in v0.6:** Spreading activation, Hebbian connection strengthening, paragraph processing, improved coreference resolution.
+No ML frameworks (PyTorch, scikit-learn, TensorFlow). spaCy is used as a linguistic parsing tool only. No vector embeddings. Pure symbolic reasoning.
+
+**Key systems:** spaCy dependency parser, response composer with varied templates, style learner with feedback loop, pandas batch loading, correction attribution, collaborator leaderboard, per-conversation context, Svelte 5 frontend with neural visualizer.
+
+See `WHERE_WE_LEFT_OFF.md` for full development status and roadmap.
 
 ## Running the Project
 
@@ -176,3 +180,76 @@ Inference engine runs as a daemon thread, processing facts asynchronously every 
 **Sentence Simplifier (`simplifier.py`):** Breaks complex sentences (lists like "X need A, B, C", parallel structures, contrast patterns) into simple statements for parsing.
 
 **Speech Processing (`speech.py`):** Audio-to-text with pluggable ASR backends (Whisper local/API, Google, Azure, Vosk). Links spoken facts to audio metadata.
+
+
+## Superskills Integration
+
+This project uses **superskills** — a portable skill and agent system.
+
+- **Skills folder:** `superskills/`
+- **Project type:** fullstack-web (Python symbolic AI + Svelte 5 frontend)
+- **Languages:** Python, JavaScript
+- **Frameworks:** Flask, Svelte 5, Vite
+
+### Agent Team
+
+The lead agent (loom-lead) orchestrates work by dispatching to specialist teammates.
+Agents are defined in `.claude/agents/`: loom-dev, loom-qa, loom-researcher, loom-frontend, loom-docs, loom-tester.
+The lead agent reads each task, decomposes it, and delegates to the right specialist(s) in parallel when possible.
+
+### Skill Selection Rules
+
+1. **Before any task**, check if a relevant skill exists in `superskills/`
+2. **Recommended skills for this project:** api-design-principles, modern-python, modern-javascript-patterns, python-testing-patterns
+3. **If no appropriate skill exists**, use the `find-skills` skill (`superskills/find-skills/SKILL.md`) to search for and install one:
+   - Run `npx skills find [query]` to search
+   - Run `npx skills add <package> -g -y` to install
+   - Save new skills into the `superskills/` folder
+4. **Always read the SKILL.md** before applying — skills evolve and have specific instructions
+
+### Skill Priority by Task Type
+
+| Task Type | Check These Skills First |
+|-----------|------------------------|
+| New feature / UI | brainstorming -> frontend-design, responsive-design |
+| API endpoint | api-design-principles, api-and-interface-design |
+| Bug fix | systematic-debugging, debug-buttercup |
+| Performance | cost-optimization, python-performance-optimization |
+| Testing | e2e-testing-patterns, python-testing-patterns, property-based-testing |
+| Security | semgrep, agentic-actions-auditor, supply-chain-risk-auditor |
+| Design | high-end-visual-design, visual-design-foundations, ui-ux-pro-max |
+| Documentation | doc-coauthoring, internal-comms |
+| Code review | differential-review, code-maturity-assessor |
+| Refactoring | clarify, modern-python or modern-javascript-patterns |
+
+### Usage Dashboard
+
+Track token consumption with the built-in dashboard:
+
+```bash
+python superskills/claude-usage/cli.py scan        # Scan usage data
+python superskills/claude-usage/cli.py today       # Today's stats
+python superskills/claude-usage/cli.py stats       # All-time stats
+python superskills/claude-usage/cli.py dashboard   # Web dashboard on localhost:8080
+```
+
+### Available Integrations
+
+When MCP integrations are connected, the lead agent can use them:
+
+- **Google Calendar** — Check schedule, create events, find availability
+- **Google Drive** — Search docs, read files, organize documents
+- **Gmail** — Read emails, draft responses, search inbox
+- **Figma** — Extract designs, implement components from Figma files
+- **Vercel** — Deploy, manage env vars, check deployment status
+- **Context7** — Fetch latest library/framework documentation
+
+To enable an integration, authenticate it via the Claude Code MCP settings.
+The lead agent will auto-detect which integrations are available and use them when relevant.
+
+### Project Conventions
+
+- Follow existing code patterns before introducing new ones
+- The lead agent auto-detects stack from package.json, requirements.txt, directory structure
+- All agents have access to skills in `superskills/`
+- New agents can be created on-the-fly by the lead agent and saved to `.claude/agents/`

@@ -189,6 +189,19 @@ class MongoStorage:
             self.db.facts.insert_one(doc)
             return True
         except DuplicateKeyError:
+            # Fact already exists — increment agreement and add this speaker
+            speaker = props.get("speaker_id")
+            update = {"$inc": {"properties.agreement_count": 1}}
+            if speaker:
+                update["$addToSet"] = {"properties.agreed_by": speaker}
+            try:
+                self.db.facts.update_one(
+                    {"instance": self.instance_name, "subject": subject,
+                     "relation": relation, "object": obj},
+                    update
+                )
+            except Exception:
+                pass
             return False
 
     def add_facts_bulk(self, docs: list) -> int:

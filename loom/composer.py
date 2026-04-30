@@ -50,7 +50,7 @@ IDENTITY_RELS = {"is", "is_a", "type_of", "kind_of"}
 ABILITY_RELS = {"can", "capable_of"}
 INABILITY_RELS = {"cannot", "unable_to"}
 PROPERTY_RELS = {"has", "has_part", "body_parts", "color"}
-LOCATION_RELS = {"lives_in", "found_in", "located_in", "habitat"}
+LOCATION_RELS = {"lives_in", "found_in", "located_in", "habitat", "habitat_type"}
 BEHAVIOR_RELS = {"eats", "hunts", "needs", "produces", "makes"}
 CAUSAL_RELS = {"causes", "leads_to", "results_in"}
 SIMILARITY_RELS = {"similar_to", "looks_like", "related_through"}
@@ -146,6 +146,7 @@ def gather_facts(loom: "Loom", concept: str, depth: int = 2) -> dict:
         "parents": [],
         "children": [],
         "confidence": {},
+        "agreement": {},
         "_loom": loom,  # reference for composer to access style_learner
     }
 
@@ -203,16 +204,20 @@ def gather_facts(loom: "Loom", concept: str, depth: int = 2) -> dict:
                         rev_list.append(entity)
                     result["reverse"][rel] = rev_list
 
-    # Get confidence from storage for direct facts
+    # Get confidence and agreement data from storage for direct facts
     try:
         for doc in loom.storage.db.facts.find(
             {"instance": loom.storage.instance_name, "subject": c},
-            {"relation": 1, "object": 1, "properties.confidence": 1}
+            {"relation": 1, "object": 1, "properties.confidence": 1,
+             "properties.agreement_count": 1, "properties.agreed_by": 1}
         ):
             rel = doc.get("relation", "")
             obj = doc.get("object", "")
-            conf = doc.get("properties", {}).get("confidence", "high")
+            props = doc.get("properties", {})
+            conf = props.get("confidence", "high")
+            agreement = props.get("agreement_count", 0)
             result["confidence"][(rel, obj)] = conf
+            result["agreement"][(rel, obj)] = agreement
     except Exception:
         pass
 
@@ -384,6 +389,21 @@ def _compose_what_is(subj: str, facts: dict) -> str:
             sentences.append(f"As a {parent}, it likely has {_format_list(inherited_props)}.")
 
     if not sentences:
+        # No identity/properties/abilities — try describing by what we DO know
+        direct = facts["direct"]
+        for rel in ["becomes", "looks_like", "causes", "produces"]:
+            items = direct.get(rel, [])
+            if items:
+                display = _format_list([_pretty(i) for i in items[:3]])
+                rel_display = rel.replace("_", " ")
+                sentences.append(f"{S} {rel_display} {display}.")
+                break
+        # If still nothing, check children
+        if not sentences and facts.get("children"):
+            children = [_pretty(c) for c in facts["children"][:5]]
+            sentences.append(f"Types of {subj} include {_format_list(children)}.")
+
+    if not sentences:
         return None
 
     return " ".join(sentences)
@@ -494,11 +514,24 @@ def _compose_has(subj: str, facts: dict) -> str:
     return None
 
 
+def _is_plural(word: str) -> bool:
+    """Simple plural check for compose grammar."""
+    w = word.lower().strip()
+    if w.endswith("s") and not w.endswith("ss") and not w.endswith("us"):
+        return True
+    if w in ("people", "children", "mice", "fish", "deer", "sheep"):
+        return True
+    return False
+
+
 def _compose_describe(subj: str, facts: dict) -> str:
     """Full description — used for 'tell me about X'. Varies format naturally."""
     direct = facts["direct"]
     inherited = facts["inherited"]
     S = subj.title()
+    _plural = _is_plural(subj)
+    _has = "have" if _plural else "has"
+    _is = "are" if _plural else "is"
 
     # Use concept hash to pick varied templates deterministically
     seed = int(hashlib.md5(subj.encode()).hexdigest()[:8], 16)
@@ -558,9 +591,9 @@ def _compose_describe(subj: str, facts: dict) -> str:
     if props:
         prop_list = _format_list(props)
         templates = [
-            f"It has {prop_list}.",
+            f"It {_has} {prop_list}.",
             f"Notable features include {prop_list}.",
-            f"It's characterized by {prop_list}.",
+            f"Characterized by {prop_list}.",
             f"Key traits: {prop_list}.",
         ]
         sentences.append(templates[(seed >> 4) % len(templates)])
@@ -616,9 +649,9 @@ def _compose_describe(subj: str, facts: dict) -> str:
     if inherited_props and not props and parent_name:
         inh_list = _format_list(inherited_props)
         templates = [
-            f"As a {parent_name}, it likely has {inh_list}.",
+            f"As a {parent_name}, it likely {_has} {inh_list}.",
             f"Being a {parent_name}, it probably possesses {inh_list}.",
-            f"From its {parent_name} classification, it likely has {inh_list}.",
+            f"From its {parent_name} classification, it likely {_has} {inh_list}.",
         ]
         sentences.append(templates[(seed >> 20) % len(templates)])
 
@@ -696,13 +729,20 @@ def _join_parts(parts: list) -> str:
 
 
 def _collect_from_rels(source: dict, rel_set: set, limit: int = 5) -> list:
-    """Collect prettified objects from a set of relations."""
+    """Collect prettified objects from a set of relations, deduplicating."""
     items = []
+    seen = set()
     for rel in rel_set:
         for obj in source.get(rel, []):
             p = _pretty(obj)
-            if p not in items:
-                items.append(p)
+            p_lower = p.lower()
+            # Skip duplicates and substrings of existing items
+            if p_lower in seen:
+                continue
+            if any(p_lower in existing or existing in p_lower for existing in seen):
+                continue
+            seen.add(p_lower)
+            items.append(p)
             if len(items) >= limit:
                 return items
     return items

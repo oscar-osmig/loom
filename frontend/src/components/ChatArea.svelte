@@ -2,13 +2,14 @@
     import { chat, clearMessages, formatConversation } from '../stores/chat.svelte.js';
     import { isAuthenticated } from '../stores/auth.svelte.js';
     import { ui } from '../stores/ui.svelte.js';
-    import { fileStore } from '../stores/files.svelte.js';
+    import { fileStore, toggleFileList } from '../stores/files.svelte.js';
     import MessageBubble from './MessageBubble.svelte';
     import WelcomeBox from './WelcomeBox.svelte';
     import AboutPage from './AboutPage.svelte';
     import SettingsPage from './SettingsPage.svelte';
     import StylePage from './StylePage.svelte';
     import LoadResultsPage from './LoadResultsPage.svelte';
+    import LeaderboardPage from './LeaderboardPage.svelte';
     import FileViewer from './FileViewer.svelte';
     import FileSidebar from './FileSidebar.svelte';
     import TypingIndicator from './TypingIndicator.svelte';
@@ -62,6 +63,8 @@
             <StylePage />
         {:else if ui.loadResultsOpen}
             <LoadResultsPage />
+        {:else if ui.leaderboardOpen}
+            <LeaderboardPage />
         {:else if fileStore.activeFile}
             <FileViewer />
         {:else}
@@ -84,6 +87,7 @@
                         content={msg.content}
                         type={msg.type}
                         meta={msg.meta}
+                        feedbackRating={msg.feedbackRating}
                         userInput={i > 0 && chat.messages[i-1].type === 'user' ? chat.messages[i-1].content : ''}
                     />
                 {/each}
@@ -95,11 +99,21 @@
                 <div class="copy-toast">Conversation copied!</div>
             {/if}
         {/if}
-    </div>
 
-    {#if isAuthenticated() && fileStore.items.length > 0 && !ui.aboutOpen && !ui.settingsOpen}
-        <FileSidebar />
-    {/if}
+        {#if isAuthenticated() && fileStore.items.length > 0 && !ui.aboutOpen && !ui.settingsOpen && !ui.stylePageOpen && !ui.loadResultsOpen && !ui.leaderboardOpen && !fileStore.activeFile}
+            {#if fileStore.listOpen}
+                <FileSidebar />
+            {:else}
+                <button class="show-files-btn" onclick={toggleFileList} title="Show files">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                    Files
+                </button>
+            {/if}
+        {/if}
+    </div>
 </div>
 
 <style>
@@ -142,6 +156,32 @@
         background: rgba(239, 68, 68, 0.1);
     }
 
+    .show-files-btn {
+        position: absolute;
+        top: 0.5rem;
+        right: 2.5rem;
+        z-index: 5;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 0.35rem 0.6rem;
+        border-radius: 8px;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        font-family: inherit;
+    }
+
+    .show-files-btn:hover {
+        color: var(--text-primary);
+        border-color: var(--accent);
+        background: var(--bg-tertiary);
+    }
+
     .messages {
         flex: 1;
         overflow-y: auto;
@@ -150,12 +190,11 @@
         flex-direction: column;
         gap: 1rem;
         position: relative;
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
     }
 
-    .messages::-webkit-scrollbar { width: 6px; }
-    .messages::-webkit-scrollbar-track { background: transparent; }
-    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    .messages::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+    .messages::-webkit-scrollbar { display: none !important; }
 
     .copy-toast {
         position: absolute;

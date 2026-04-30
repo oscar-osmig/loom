@@ -272,6 +272,15 @@ class InferenceEngine:
                 if bridges and self.loom.verbose:
                     print(f"       [bridges: created {len(bridges)} category connections]")
 
+            # Detect temporal conflicts every 15 cycles (45 seconds)
+            if cycle_count % 15 == 0 and hasattr(self.loom, 'detect_temporal_conflicts'):
+                try:
+                    temporal_conflicts = self.loom.detect_temporal_conflicts()
+                    if temporal_conflicts and self.loom.verbose:
+                        print(f"       [temporal: {len(temporal_conflicts)} conflicts detected]")
+                except Exception:
+                    pass
+
             # Run frame system every 5 cycles (15 seconds)
             if cycle_count % 5 == 0 and hasattr(self.loom, 'frame_manager'):
                 propagated = self.loom.frame_manager.run_background_cycle()

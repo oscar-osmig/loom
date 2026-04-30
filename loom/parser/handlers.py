@@ -74,8 +74,14 @@ def _check_correction(parser, t: str) -> str | None:
                     parser.loom.retract_fact(subj, "is", old)
                     parser.loom.context.add_correction(old, obj, "is")
 
-            # Add the new fact
-            parser.loom.add_fact(subj, "is", obj)
+            # Add the corrected fact with attribution
+            corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
+            parser.loom.add_fact(subj, "is", obj, properties={
+                "source_type": "clarification",
+                "corrected_by": corrector,
+            })
+            # Record the correction event
+            _record_correction(parser.loom, subj, "is", obj, corrector)
             parser.loom.context.update(subject=subj, obj=obj)
             parser.last_subject = subj
 
@@ -88,9 +94,13 @@ def _check_correction(parser, t: str) -> str | None:
             subj = parts[0].strip()
             action = parts[1].strip()
 
-            # Retract "can" if it exists
+            corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
             parser.loom.retract_fact(subj, "can", action)
-            parser.loom.add_fact(subj, "cannot", action)
+            parser.loom.add_fact(subj, "cannot", action, properties={
+                "source_type": "clarification",
+                "corrected_by": corrector,
+            })
+            _record_correction(parser.loom, subj, "cannot", action, corrector)
 
             return f"Corrected. {subj.title()} cannot {action}."
 
@@ -102,12 +112,33 @@ def _check_correction(parser, t: str) -> str | None:
             subj = parts[0].strip()
             obj = parts[1].strip()
 
+            corrector = getattr(parser.loom, '_session_speaker_id', None) or ''
             parser.loom.retract_fact(subj, "has", obj)
-            parser.loom.add_fact(subj, "has_not", obj)
+            parser.loom.add_fact(subj, "has_not", obj, properties={
+                "source_type": "clarification",
+                "corrected_by": corrector,
+            })
+            _record_correction(parser.loom, subj, "has_not", obj, corrector)
 
             return f"Corrected. {subj.title()} doesn't have {obj}."
 
     return None
+
+
+def _record_correction(loom, subject, relation, obj, corrector):
+    """Store a correction event in MongoDB for leaderboard tracking."""
+    from datetime import datetime, timezone
+    try:
+        loom.storage.db.corrections.insert_one({
+            "instance": loom.storage.instance_name,
+            "subject": subject,
+            "relation": relation,
+            "object": obj,
+            "corrected_by": corrector,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
 
 
 def _check_refinement(parser, t: str) -> str | None:

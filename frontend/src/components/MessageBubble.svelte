@@ -1,11 +1,76 @@
 <script>
-    import { sendFeedback } from '../lib/api.js';
+    import { sendFeedback, submitResponseEdit } from '../lib/api.js';
     import { auth } from '../stores/auth.svelte.js';
+    import { updateMessage, markFeedback } from '../stores/chat.svelte.js';
 
-    let { id, content, type = 'assistant', meta = undefined, userInput = '' } = $props();
+    let { id, content, type = 'assistant', meta = undefined, userInput = '', feedbackRating = null } = $props();
 
-    let feedbackGiven = $state(false);
+    let feedbackGiven = $state(!!feedbackRating);
     let feedbackSubmitting = $state(false);
+
+    // Edit state
+    let isEditing = $state(false);
+    let editText = $state('');
+    let editSaving = $state(false);
+    let editSaved = $state(false);
+
+    const canEdit = $derived(
+        (type === 'assistant' || type === 'response') &&
+        content && content.length > 0
+    );
+
+    function stripHtml(html) {
+        return (html || '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#x27;/g, "'")
+            .trim();
+    }
+
+    function startEdit() {
+        editText = stripHtml(content);
+        isEditing = true;
+        editSaved = false;
+    }
+
+    function cancelEdit() {
+        isEditing = false;
+    }
+
+    async function saveEdit() {
+        const cleaned = editText.trim();
+        if (!cleaned || cleaned === stripHtml(content)) {
+            isEditing = false;
+            return;
+        }
+        editSaving = true;
+        try {
+            await submitResponseEdit({
+                message_id: id,
+                original_response: content,
+                edited_response: cleaned,
+                user: auth.user,
+                input_text: userInput,
+            });
+            updateMessage(id, cleaned);
+            editSaved = true;
+        } catch {}
+        editSaving = false;
+        isEditing = false;
+    }
+
+    function handleEditKeydown(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            saveEdit();
+        } else if (e.key === 'Escape') {
+            cancelEdit();
+        }
+    }
 
     const metaText = $derived.by(() => {
         if (!meta) return '';
@@ -37,18 +102,55 @@
                 response_text: content,
             });
         } catch {}
+        markFeedback(id, rating);
         feedbackGiven = true;
         feedbackSubmitting = false;
     }
 </script>
 
 <div class="message-wrapper {type}">
+    {#if canEdit && !isEditing}
+        <div class="edit-btn-row">
+            <button class="edit-btn" onclick={startEdit} aria-label="Edit this response" title="Suggest a better response">
+                {#if editSaved}
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                {:else}
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                        <path d="m15 5 4 4"/>
+                    </svg>
+                {/if}
+            </button>
+        </div>
+    {/if}
     <div class="message {type}">
-        {@html content}
-        {#if meta && metaText}
+        {#if isEditing}
+            <div class="edit-area">
+                <!-- svelte-ignore a11y_autofocus -->
+                <textarea
+                    class="edit-textarea"
+                    bind:value={editText}
+                    onkeydown={handleEditKeydown}
+                    autofocus
+                    rows={Math.max(2, editText.split('\n').length)}
+                ></textarea>
+                <div class="edit-actions">
+                    <button class="edit-save-btn" onclick={saveEdit} disabled={editSaving}>
+                        {editSaving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button class="edit-cancel-btn" onclick={cancelEdit}>Cancel</button>
+                    <span class="edit-hint">Enter to save, Esc to cancel</span>
+                </div>
+            </div>
+        {:else}
+            {@html content}
+        {/if}
+        {#if meta && metaText && !isEditing}
             <div class="meta-badge">{metaText}</div>
         {/if}
-        {#if showFeedback && inlineFeedback}
+        {#if showFeedback && inlineFeedback && !isEditing}
             <span class="feedback-inline">
                 <button class="fb-btn" onclick={() => handleFeedback('like')} aria-label="I like this response">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -63,7 +165,7 @@
             </span>
         {/if}
     </div>
-    {#if showFeedback && !inlineFeedback}
+    {#if showFeedback && !inlineFeedback && !isEditing}
         <div class="feedback-row">
             <button class="fb-btn" onclick={() => handleFeedback('like')} aria-label="I like this response">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -202,5 +304,116 @@
         color: var(--error);
         border-color: var(--error);
         background: rgba(239, 68, 68, 0.1);
+    }
+
+    /* ── Edit button ── */
+
+    .edit-btn-row {
+        display: flex;
+        justify-content: flex-end;
+        opacity: 0;
+        transition: opacity 0.15s;
+    }
+
+    .message-wrapper:hover .edit-btn-row {
+        opacity: 1;
+    }
+
+    .edit-btn {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text-muted);
+        padding: 0.2rem 0.3rem;
+        border-radius: 5px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+    }
+
+    .edit-btn:hover {
+        color: var(--accent);
+        border-color: var(--border);
+        background: var(--bg-secondary);
+    }
+
+    /* ── Edit area ── */
+
+    .edit-area {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        width: 100%;
+    }
+
+    .edit-textarea {
+        width: 100%;
+        min-height: 2.5rem;
+        padding: 0.5rem 0.625rem;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        font-family: inherit;
+        font-size: 0.9375rem;
+        line-height: 1.6;
+        resize: vertical;
+        outline: none;
+        box-sizing: border-box;
+    }
+
+    .edit-textarea:focus {
+        border-color: var(--accent-hover);
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+    }
+
+    .edit-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .edit-save-btn {
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 0.3rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+    .edit-save-btn:hover:not(:disabled) {
+        background: var(--accent-hover);
+    }
+
+    .edit-save-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .edit-cancel-btn {
+        background: transparent;
+        color: var(--text-muted);
+        border: 1px solid var(--border);
+        padding: 0.3rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8125rem;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+
+    .edit-cancel-btn:hover {
+        color: var(--text-primary);
+        border-color: var(--text-muted);
+    }
+
+    .edit-hint {
+        font-size: 0.6875rem;
+        color: var(--text-muted);
+        margin-left: auto;
     }
 </style>

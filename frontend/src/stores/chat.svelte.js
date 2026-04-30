@@ -77,6 +77,22 @@ export function setTyping(value) {
     chat.isTyping = value;
 }
 
+export function updateMessage(id, newContent) {
+    const msg = chat.messages.find(m => m.id === id);
+    if (msg) {
+        msg.content = newContent;
+        persistMessages();
+    }
+}
+
+export function markFeedback(id, rating) {
+    const msg = chat.messages.find(m => m.id === id);
+    if (msg) {
+        msg.feedbackRating = rating;
+        persistMessages();
+    }
+}
+
 export function clearMessages() {
     chat.messages.length = 0;
     nextId = 1;

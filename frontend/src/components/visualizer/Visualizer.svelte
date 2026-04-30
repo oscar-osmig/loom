@@ -366,6 +366,15 @@
                     </div>
                 {/if}
 
+                {#if detailNode.correctors && detailNode.correctors.length > 0}
+                    <div class="detail-creators correctors">
+                        <span class="creators-label">Corrected by</span>
+                        {#each detailNode.correctors as corrector}
+                            <span class="corrector-tag">{corrector}</span>
+                        {/each}
+                    </div>
+                {/if}
+
                 <div class="detail-body">
                     {#if getNodeRelations(detailNode).length > 0}
                         {@const relations = getNodeRelations(detailNode)}
@@ -620,6 +629,13 @@
     .creator-tag {
         font-size: 0.6875rem; color: rgba(100,200,255,0.8);
         background: rgba(100,200,255,0.1); padding: 1px 8px;
+        border-radius: 6px;
+    }
+    .detail-creators.correctors { border-bottom-color: rgba(251,146,60,0.15); }
+    .detail-creators.correctors .creators-label { color: rgba(251,146,60,0.6); }
+    .corrector-tag {
+        font-size: 0.6875rem; color: rgba(251,146,60,0.8);
+        background: rgba(251,146,60,0.1); padding: 1px 8px;
         border-radius: 6px;
     }
 

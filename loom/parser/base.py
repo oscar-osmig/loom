@@ -540,7 +540,8 @@ class Parser:
             self._check_self_identity_query,     # "what are you?" - self-identity query
             self._check_describe_query,          # "tell me about X", "describe X" — composer-backed
             self._check_why_query,               # "why do/can/is X Y?" — composer-backed
-            self._check_generic_query,           # Generic SVO-based query engine (handles most questions)
+            self._check_composer_query,          # Unified composer-backed query handler (replaces legacy)
+            self._check_generic_query,           # Generic SVO fallback (last resort for questions)
             self._check_negation,
             self._check_color_query,
             self._check_where_lay_eggs_query,    # "where do X lay eggs?" - BEFORE where_query!
@@ -972,53 +973,200 @@ class Parser:
             pass
         return None
 
+    def _check_composer_query(self, t: str) -> str | None:
+        """
+        Unified composer-backed query handler. Routes all major question types
+        through the composer for consistent, high-quality responses.
+        Replaces the scattered legacy handlers for what/where/can/has queries.
+        """
+        if not self._is_question(t):
+            return None
+
+        import re
+        from ..composer import gather_facts, compose_response, _resolve_concept
+        from ..normalizer import normalize
+
+        # Strip question marks and trailing punctuation
+        q = t.lower().strip().rstrip("?.!")
+
+        # Helper: strip articles and common prefixes from a subject
+        def clean_subject(s):
+            for prefix in ["the ", "a ", "an ", "some ", "my ", "our "]:
+                if s.startswith(prefix):
+                    s = s[len(prefix):]
+            return s.strip()
+
+        # ── "what is X?" / "what are X?" ──
+        m = re.match(r"what\s+(?:is|are)\s+(.+)", q)
+        if m:
+            concept = clean_subject(m.group(1).strip())
+            try:
+                facts = gather_facts(self.loom, concept)
+                if facts["direct"] or facts["inherited"]:
+                    result = compose_response(self.loom, "what_is", concept, facts=facts)
+                    if result:
+                        self.last_subject = facts["concept"]
+                        self.loom.context.update(subject=facts["concept"])
+                        return result
+            except Exception:
+                pass
+
+        # ── "where do/does/can X live/be found?" ──
+        m = re.match(r"where\s+(?:do|does|can|is|are)\s+(.+?)\s+(?:live|lives|found|be found|located|stay|come from)", q)
+        if not m:
+            # Fallback: "where is X?" / "where are X?"
+            m = re.match(r"where\s+(?:is|are|do|does|can)\s+(.+)", q)
+        if m and q.startswith("where"):
+            concept = clean_subject(m.group(1).strip())
+            # Strip trailing verbs that might have been captured
+            for suffix in [" live", " lives", " found", " be found", " located", " stay"]:
+                if concept.endswith(suffix):
+                    concept = concept[:-len(suffix)].strip()
+            try:
+                result = compose_response(self.loom, "where", concept)
+                if result:
+                    return result
+            except Exception:
+                pass
+
+        # ── "can X do Y?" ──
+        m = re.match(r"can\s+(.+?)\s+(\w+(?:\s+\w+)?)\s*$", q)
+        if m:
+            concept = clean_subject(m.group(1).strip())
+            target = m.group(2).strip()
+            try:
+                result = compose_response(self.loom, "can", concept, relation="can", target=target)
+                if result:
+                    return result
+            except Exception:
+                pass
+
+        # ── "what can X do?" / "what does X have?" / "what does X eat?" ──
+        m = re.match(r"what\s+(?:can|does|do)\s+(.+?)\s+(do|have|eat|need|cause|produce|make)\s*$", q)
+        if m:
+            concept = clean_subject(m.group(1).strip())
+            verb = m.group(2).strip()
+            if verb == "do":
+                # "what can X do?" → describe abilities
+                try:
+                    facts = gather_facts(self.loom, concept)
+                    if facts["direct"] or facts["inherited"]:
+                        # Collect abilities
+                        from ..composer import _collect_from_rels, _format_list, ABILITY_RELS, _pretty
+                        abilities = _collect_from_rels(facts["direct"], ABILITY_RELS, limit=6)
+                        if abilities:
+                            S = _pretty(facts["concept"]).title()
+                            return f"{S} can {_format_list(abilities)}."
+                except Exception:
+                    pass
+            else:
+                # Map verb to relation and use general composer
+                verb_map = {"have": "has", "eat": "eats", "need": "needs",
+                            "cause": "causes", "produce": "produces", "make": "makes"}
+                relation = verb_map.get(verb, verb)
+                try:
+                    result = compose_response(self.loom, "general", concept, relation=relation)
+                    if result:
+                        return result
+                except Exception:
+                    pass
+
+        # ── "what does X verb?" (generic) ──
+        m = re.match(r"what\s+(?:does|do)\s+(.+?)\s+(\w+)\s*$", q)
+        if m:
+            concept = clean_subject(m.group(1).strip())
+            verb = m.group(2).strip()
+            try:
+                result = compose_response(self.loom, "general", concept, relation=verb)
+                if result:
+                    return result
+            except Exception:
+                pass
+
+        # ── "does X have Y?" / "is X Y?" ──
+        m = re.match(r"(?:does|do)\s+(.+?)\s+(have|eat|need)\s+(.+)", q)
+        if m:
+            concept = clean_subject(m.group(1).strip())
+            verb = m.group(2).strip()
+            target = m.group(3).strip()
+            verb_map = {"have": "has", "eat": "eats", "need": "needs"}
+            relation = verb_map.get(verb, verb)
+            try:
+                c = _resolve_concept(self.loom.knowledge, concept)
+                items = self.loom.knowledge.get(c, {}).get(relation, [])
+                target_norm = normalize(target)
+                for item in items:
+                    if target_norm in normalize(item) or normalize(item) in target_norm:
+                        return f"Yes, {concept} {verb}s {target.replace('_', ' ')}."
+                return f"I don't think {concept} {verb}s {target}."
+            except Exception:
+                pass
+
+        return None
+
     def _check_grammar_parser(self, t: str) -> str | None:
         """
-        Try the recursive descent grammar parser for complex sentences
-        with relative clauses, conjunctions, etc. Returns None if the
-        parser can't handle it (falls through to regex handlers).
+        Try spaCy dependency parser for complex sentences, falling back
+        to the manual recursive descent parser. Returns None if neither
+        can handle it (falls through to regex handlers).
         """
         # Only attempt if sentence has structural complexity
         has_relative = bool(re.search(r"\b(that|which|who)\s+(have|has|can|is|are|was|were|eat|live)", t))
-        has_multiple_clauses = t.count(",") >= 2 or " and " in t
-        if not (has_relative or has_multiple_clauses):
+        has_conjoined = " and " in t and (t.count(",") >= 1 or " and " in t.split(" is ")[0] if " is " in t else True)
+        has_multiple_clauses = t.count(",") >= 2
+        if not (has_relative or has_conjoined or has_multiple_clauses):
             return None
         if self._is_question(t):
             return None
 
+        facts = []
+
+        # Try spaCy first (better quality)
         try:
-            from ..grammar_parser import parse_and_extract
-            facts = parse_and_extract(t)
-            if not facts or len(facts) < 2:
-                return None  # Didn't parse well enough; let regex try
-
-            added = 0
-            for fact in facts:
-                s = fact.subject.strip()
-                r = fact.relation.strip()
-                o = fact.obj.strip()
-                if not s or not r or not o:
-                    continue
-                if len(s) > 50 or len(o) > 50:
-                    continue
-                try:
-                    existing = self.loom.get(s, r) or []
-                    if o.lower() not in [e.lower() for e in existing]:
-                        self.loom.add_fact(s, r, o)
-                        added += 1
-                except Exception:
-                    pass
-
-            if added > 0:
-                self.last_subject = facts[0].subject
-                self.loom.context.update(
-                    subject=facts[0].subject,
-                    relation=facts[0].relation,
-                    obj=facts[0].obj,
-                )
-                return f"Got it — parsed {added} fact{'s' if added != 1 else ''} from that sentence."
+            from ..spacy_parser import parse as spacy_parse, SPACY_AVAILABLE
+            if SPACY_AVAILABLE:
+                facts = spacy_parse(t)
         except Exception:
             pass
+
+        # Fallback to manual grammar parser
+        if not facts or len(facts) < 2:
+            try:
+                from ..grammar_parser import parse_and_extract
+                manual_facts = parse_and_extract(t)
+                if manual_facts and len(manual_facts) >= 2:
+                    facts = manual_facts
+            except Exception:
+                pass
+
+        if not facts or len(facts) < 2:
+            return None
+
+        added = 0
+        for fact in facts:
+            s = fact.subject.strip()
+            r = fact.relation.strip()
+            o = fact.obj.strip()
+            if not s or not r or not o:
+                continue
+            if len(s) > 50 or len(o) > 50:
+                continue
+            try:
+                existing = self.loom.get(s, r) or []
+                if o.lower() not in [e.lower() for e in existing]:
+                    self.loom.add_fact(s, r, o)
+                    added += 1
+            except Exception:
+                pass
+
+        if added > 0:
+            self.last_subject = facts[0].subject
+            self.loom.context.update(
+                subject=facts[0].subject,
+                relation=facts[0].relation,
+                obj=facts[0].obj,
+            )
+            return f"Got it — learned {added} fact{'s' if added != 1 else ''} from that."
         return None
 
     def _check_what_query(self, t: str) -> str | None:

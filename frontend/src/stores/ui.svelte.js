@@ -21,6 +21,7 @@ export const ui = $state({
     settingsOpen: false,
     stylePageOpen: false,
     loadResultsOpen: false,
+    leaderboardOpen: false,
     loadResultsData: null,
     headerLocked: !isLoggedIn(),
 });
@@ -45,6 +46,7 @@ export function setTrainInfoOpen(value) { ui.trainInfoOpen = value; }
 export function setAboutOpen(value) { ui.aboutOpen = value; if (value) { ui.settingsOpen = false; ui.stylePageOpen = false; } }
 export function setSettingsOpen(value) { ui.settingsOpen = value; if (value) { ui.aboutOpen = false; ui.stylePageOpen = false; } }
 export function setStylePageOpen(value) { ui.stylePageOpen = value; if (value) { ui.aboutOpen = false; ui.settingsOpen = false; ui.loadResultsOpen = false; } }
-export function showLoadResults(data) { ui.loadResultsData = data; ui.loadResultsOpen = true; ui.aboutOpen = false; ui.settingsOpen = false; ui.stylePageOpen = false; }
+export function setLeaderboardOpen(value) { ui.leaderboardOpen = value; if (value) { ui.aboutOpen = false; ui.settingsOpen = false; ui.stylePageOpen = false; ui.loadResultsOpen = false; } }
+export function showLoadResults(data) { ui.loadResultsData = data; ui.loadResultsOpen = true; ui.aboutOpen = false; ui.settingsOpen = false; ui.stylePageOpen = false; ui.leaderboardOpen = false; }
 export function closeLoadResults() { ui.loadResultsOpen = false; ui.loadResultsData = null; }
 export function setHeaderLocked(value) { ui.headerLocked = value; }

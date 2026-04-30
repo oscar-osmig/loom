@@ -47,8 +47,8 @@ MIN_DISCOVERY_CONFIDENCE = 0.7
 # Maximum relations to add per discovery cycle (prevent pollution)
 MAX_RELATIONS_PER_CYCLE = 10
 
-# Disable automatic neuron creation (too aggressive)
-AUTO_CREATE_NEURONS = False
+# Enable automatic neuron creation from stable patterns
+AUTO_CREATE_NEURONS = True
 
 
 @dataclass

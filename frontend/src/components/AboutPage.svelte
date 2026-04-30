@@ -20,95 +20,95 @@
 
     <div class="about-body">
         <section>
-            <h3>How Loom Works</h3>
-            <p>Loom learns by creating <b>neurons</b> (concepts) and <b>synapses</b> (connections) from your statements. It builds a knowledge graph through natural conversation — no ML frameworks (PyTorch, scikit-learn, TensorFlow), no vector embeddings (Word2Vec, BERT). Every concept is a named node with explicit, traceable relationships — pure symbolic reasoning.</p>
+            <h3>What is Loom?</h3>
+            <p>Loom is a community-built symbolic knowledge system that learns from what people teach it through natural conversation.</p>
         </section>
 
         <section>
-            <h3>Teaching</h3>
-            <div class="examples">
-                <div class="example"><code>dogs are animals</code><span>categories</span></div>
-                <div class="example"><code>birds can fly</code><span>abilities</span></div>
-                <div class="example"><code>cats have fur</code><span>properties</span></div>
-                <div class="example"><code>rain causes floods</code><span>causation</span></div>
-                <div class="example"><code>no, that's wrong</code><span>corrections</span></div>
-                <div class="example"><code>only when it's warm</code><span>constraints</span></div>
-            </div>
-            <p class="hint">You can also paste entire paragraphs. Loom will break them into chunks, find discourse relations, and build connections across sentences.</p>
-        </section>
-
-        <section>
-            <h3>Asking</h3>
-            <div class="examples">
-                <div class="example"><code>what are dogs?</code><span>categories</span></div>
-                <div class="example"><code>can birds fly?</code><span>abilities</span></div>
-                <div class="example"><code>what does rain cause?</code><span>effects</span></div>
-            </div>
-        </section>
-
-        <section>
-            <h3>Commands</h3>
-            <p class="hint">All commands use the <code>/</code> prefix.</p>
-            <div class="commands">
-                <div class="cmd"><code>/show</code><span>View knowledge summary</span></div>
-                <div class="cmd"><code>/neuron X</code><span>Inspect concept X</span></div>
-                <div class="cmd"><code>/frame X</code><span>Show concept frame (attribute slots)</span></div>
-                <div class="cmd"><code>/bridges [X]</code><span>Show attribute bridges between concepts</span></div>
-                <div class="cmd"><code>/clusters</code><span>Show emergent category clusters</span></div>
-                <div class="cmd"><code>/activation</code><span>Show activation state</span></div>
-                <div class="cmd"><code>/weights</code><span>Show strong connections</span></div>
-                <div class="cmd"><code>/analogies X</code><span>Find similar concepts</span></div>
-                <div class="cmd"><code>/stats</code><span>Storage statistics</span></div>
-                <div class="cmd"><code>/clear</code><span>Clear chat history</span></div>
-                <div class="cmd"><code>/forget</code><span>Erase your own facts</span></div>
-                <div class="cmd"><code>/help</code><span>Show quick help</span></div>
-            </div>
-        </section>
-
-        <section>
-            <h3>Training Loom</h3>
-            <p>There are several ways to teach Loom new knowledge:</p>
+            <h3>What Makes It Different</h3>
             <div class="features">
                 <div class="feature">
-                    <b>Chat</b>
-                    <span>Just type facts in natural language. <code>dogs are animals</code>, <code>water boils at 100 degrees</code> — Loom extracts the relationships automatically.</span>
+                    <b>Built from contributions</b>
+                    <span>Loom starts with minimal built-in knowledge and grows as people add and refine facts.</span>
                 </div>
                 <div class="feature">
-                    <b>Paragraphs</b>
-                    <span>Paste entire paragraphs or articles. Loom splits them into sentences, detects discourse relations (cause, contrast, elaboration), and builds cross-sentence connections.</span>
+                    <b>Explicit relationships</b>
+                    <span>No opaque embeddings. Every idea is stored as a named connection (e.g., <code>dog → is → mammal</code>).</span>
                 </div>
                 <div class="feature">
-                    <b>File Upload</b>
-                    <span>Drag and drop <code>.json</code> or <code>.txt</code> files onto the chat, or use the Train button. JSON files should contain an array of fact strings. Text files are processed line by line. Uploaded files are saved in your browser so you can review and edit them.</span>
+                    <b>Attribution built-in</b>
+                    <span>Facts, edits, and corrections are tied to the people who contributed them.</span>
                 </div>
+                <div class="feature">
+                    <b>Consensus over time</b>
+                    <span>As more people confirm or challenge a fact, its reliability becomes clearer.</span>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h3>How It Works</h3>
+            <div class="features">
+                <div class="feature">
+                    <b>Knowledge graph</b>
+                    <span>Knowledge is stored as a graph of concepts and relationships.</span>
+                </div>
+                <div class="feature">
+                    <b>Natural language parser</b>
+                    <span>A parser turns natural language into structured facts.</span>
+                </div>
+                <div class="feature">
+                    <b>Spreading activation</b>
+                    <span>Surfaces related concepts during conversation.</span>
+                </div>
+                <div class="feature">
+                    <b>Hebbian strengthening</b>
+                    <span>Repeated co-occurrence strengthens connections over time.</span>
+                </div>
+                <div class="feature">
+                    <b>Inference</b>
+                    <span>Derives new facts — transitive relationships, inherited properties, analogies.</span>
+                </div>
+                <div class="feature">
+                    <b>Response composer</b>
+                    <span>Combines relevant facts into natural language answers.</span>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h3>Community Layer</h3>
+            <div class="features">
                 <div class="feature">
                     <b>Corrections</b>
-                    <span>Say <code>no, that's wrong</code> or <code>actually, cats are mammals</code> to correct existing knowledge. Loom tracks provenance and updates accordingly.</span>
+                    <span>Visible and attributed — click the people icon to see who's contributing.</span>
+                </div>
+                <div class="feature">
+                    <b>Contributors</b>
+                    <span>Ranked by activity and impact — facts taught, corrections made, messages sent.</span>
+                </div>
+                <div class="feature">
+                    <b>Feedback</b>
+                    <span>Rate responses with 👍/👎 to shape how Loom communicates over time.</span>
                 </div>
             </div>
-            <p class="hint">The more you teach, the more Loom can infer on its own through transitive chains, property inheritance, and analogy detection.</p>
         </section>
 
         <section>
-            <h3>Under the Hood</h3>
-            <div class="features">
-                <div class="feature">
-                    <b>Spreading Activation</b>
-                    <span>Mentioned concepts activate nearby nodes, surfacing related knowledge automatically.</span>
-                </div>
-                <div class="feature">
-                    <b>Hebbian Learning</b>
-                    <span>Connections strengthen with use — "cells that fire together wire together."</span>
-                </div>
-                <div class="feature">
-                    <b>Inference Engine</b>
-                    <span>Transitive chaining, property inheritance, and analogy detection run in the background.</span>
-                </div>
-                <div class="feature">
-                    <b>Discourse Parsing</b>
-                    <span>Multi-sentence text is chunked and analyzed for causal, contrast, and elaboration relations.</span>
-                </div>
+            <h3>The Idea</h3>
+            <p>A knowledge system you can talk to, where every fact is transparent, attributed, and open to revision — closer to a conversational Wikipedia than a black-box model.</p>
+        </section>
+
+        <section>
+            <h3>Ways to Contribute</h3>
+            <div class="examples">
+                <div class="example"><code>dogs are mammals</code><span>teach a fact</span></div>
+                <div class="example"><code>no, that's wrong</code><span>correct a mistake</span></div>
+                <div class="example"><code>tell me about cats</code><span>test Loom's knowledge</span></div>
+                <div class="example"><code>/visualize</code><span>explore the knowledge graph</span></div>
+                <div class="example"><code>/help</code><span>see all commands</span></div>
             </div>
+            <p class="hint">You can also paste paragraphs, drag and drop training files, or upload files via the Train button.</p>
         </section>
 
     </div>
@@ -260,85 +260,6 @@
         font-size: 0.8125rem;
         color: var(--text-muted);
         line-height: 1.5;
-    }
-
-    .style-stats {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 0.625rem;
-        margin: 0.875rem 0;
-    }
-
-    .stat-box {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 0.875rem 0.5rem;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        text-align: center;
-    }
-
-    .stat-value {
-        font-size: 1.375rem;
-        font-weight: 700;
-        color: var(--accent-hover);
-        font-variant-numeric: tabular-nums;
-    }
-
-    .stat-label {
-        font-size: 0.6875rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-top: 0.25rem;
-    }
-
-    .patterns-list {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-        margin-top: 1rem;
-    }
-
-    .patterns-title {
-        font-size: 0.75rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 0.375rem;
-    }
-
-    .pattern-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 0.375rem 0.625rem;
-        background: var(--bg-secondary);
-        border-radius: 6px;
-    }
-
-    .pattern-label {
-        font-size: 0.8125rem;
-        color: var(--accent-hover);
-        background: transparent;
-        padding: 0;
-    }
-
-    .pattern-feedback {
-        display: inline-flex;
-        gap: 0.5rem;
-        font-size: 0.75rem;
-    }
-
-    .like-count { color: var(--success); }
-    .dislike-count { color: var(--error); }
-    .neutral { color: var(--text-muted); font-style: italic; }
-
-    .pattern-count {
-        font-size: 0.75rem;
-        color: var(--text-muted);
     }
 
     @keyframes fadeIn {
