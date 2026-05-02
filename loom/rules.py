@@ -295,10 +295,16 @@ class RuleMemory:
     def _init_mongo(self):
         """Initialize MongoDB collection for rules."""
         try:
-            from pymongo import MongoClient
-            client = MongoClient('localhost', 27017)
-            db = client['loom']
-            self._mongo_collection = db['rules']
+            if self.loom and hasattr(self.loom, 'storage') and self.loom.storage and self.loom.storage.db is not None:
+                self._mongo_collection = self.loom.storage.db['rules']
+            else:
+                import os
+                from pymongo import MongoClient
+                uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+                client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+                client.admin.command('ping')
+                db = client['loom']
+                self._mongo_collection = db['rules']
             self._load_from_mongo()
             logger.info("Connected to MongoDB for rule storage")
         except Exception as e:
