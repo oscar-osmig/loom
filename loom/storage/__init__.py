@@ -58,7 +58,12 @@ def get_storage(**kwargs):
     if "connection_string" not in kwargs:
         env_uri = os.environ.get("MONGO_URI")
         if env_uri:
+            # Strip quotes in case env var was wrapped in them
+            env_uri = env_uri.strip().strip('"').strip("'")
             kwargs["connection_string"] = env_uri
+            logger.info(f"Using MONGO_URI from environment (host: {env_uri.split('@')[-1].split('/')[0] if '@' in env_uri else 'direct'})")
+        else:
+            logger.warning("MONGO_URI not set — falling back to localhost:27017")
 
     if not PYMONGO_AVAILABLE:
         raise ImportError("pymongo is required. Install with: pip install pymongo")
