@@ -249,7 +249,7 @@
         if (!contextMenu) return;
         const node = contextMenu.node;
         const visited = new Set();
-        const text = buildNodeTree(node.id, visited, 0, 3);
+        const text = buildNodeTree(node.id, visited, 0, Infinity);
         navigator.clipboard.writeText(text.trim());
         contextMenu = null;
     }
