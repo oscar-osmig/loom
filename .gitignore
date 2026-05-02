@@ -2,8 +2,6 @@
 .env
 
 # Build output
-/static/assets/
-/static/index.html
 frontend/node_modules/
 
 # IDE and cache
