@@ -183,35 +183,73 @@
         contextMenu = null;
     }
 
-    function copyNeuronData() {
-        if (!contextMenu) return;
-        const node = contextMenu.node;
-        const relations = getNodeRelations(node);
-        const grouped = groupRelations(relations);
+    function getRelationsById(nodeId) {
+        if (!graphData) return [];
+        const relations = [];
+        const synapses = graphData.synapses || graphData.edges || [];
+        for (const syn of synapses) {
+            const srcId = typeof syn.source === 'string' ? syn.source : syn.source?.id;
+            const tgtId = typeof syn.target === 'string' ? syn.target : syn.target?.id;
+            if (srcId === nodeId) {
+                relations.push({ direction: 'out', relation: syn.relation || syn.label || 'related', target: tgtId, weight: syn.weight || 1 });
+            } else if (tgtId === nodeId) {
+                relations.push({ direction: 'in', relation: syn.relation || syn.label || 'related', target: srcId, weight: syn.weight || 1 });
+            }
+        }
+        return relations;
+    }
 
-        let text = `${node.label}\n`;
-        text += `${'='.repeat(node.label.length)}\n`;
-        text += `Connections: ${node.connections}\n`;
-        if (node.isSystem) text += `Type: system\n`;
-        if (node.isLonely) text += `Type: isolated\n`;
-        if (node.creators?.length) text += `Created by: ${node.creators.join(', ')}\n`;
-        if (node.correctors?.length) text += `Corrected by: ${node.correctors.join(', ')}\n`;
+    function findNodeById(nodeId) {
+        if (!engine) return null;
+        return engine.nodes.find(n => n.id === nodeId) || null;
+    }
 
-        if (Object.keys(grouped).length > 0) {
-            text += `\nRelations:\n`;
-            for (const [relType, rels] of Object.entries(grouped)) {
-                for (const rel of rels) {
-                    if (rel.direction === 'out') {
-                        text += `  ${node.id} —[${relType}]→ ${rel.target}`;
-                    } else {
-                        text += `  ${rel.target} —[${relType}]→ ${node.id}`;
-                    }
-                    if (rel.weight > 1) text += ` (weight: ${rel.weight.toFixed(1)})`;
-                    text += `\n`;
-                }
+    function buildNodeTree(nodeId, visited, indent, maxDepth) {
+        if (visited.has(nodeId) || indent > maxDepth) return '';
+        visited.add(nodeId);
+
+        const node = findNodeById(nodeId);
+        const prefix = '  '.repeat(indent);
+        let text = '';
+
+        // Node header
+        if (indent === 0) {
+            text += `${node?.label || nodeId}\n`;
+            text += `${'='.repeat((node?.label || nodeId).length)}\n`;
+            if (node?.isSystem) text += `Type: system\n`;
+            if (node?.isLonely) text += `Type: isolated\n`;
+            if (node?.creators?.length) text += `Created by: ${node.creators.join(', ')}\n`;
+            if (node?.correctors?.length) text += `Corrected by: ${node.correctors.join(', ')}\n`;
+            text += '\n';
+        }
+
+        const rels = getRelationsById(nodeId);
+        const grouped = groupRelations(rels);
+
+        for (const [relType, items] of Object.entries(grouped)) {
+            for (const rel of items) {
+                const other = rel.direction === 'out' ? rel.target : rel.target;
+                const arrow = rel.direction === 'out'
+                    ? `${prefix}—[${relType}]→ ${other}`
+                    : `${prefix}${other} —[${relType}]→ this`;
+                text += arrow;
+                if (rel.weight > 1) text += ` (weight: ${rel.weight.toFixed(1)})`;
+                text += '\n';
+
+                // Recurse into connected node
+                const childText = buildNodeTree(other, visited, indent + 1, maxDepth);
+                if (childText) text += childText;
             }
         }
 
+        return text;
+    }
+
+    function copyNeuronData() {
+        if (!contextMenu) return;
+        const node = contextMenu.node;
+        const visited = new Set();
+        const text = buildNodeTree(node.id, visited, 0, 3);
         navigator.clipboard.writeText(text.trim());
         contextMenu = null;
     }

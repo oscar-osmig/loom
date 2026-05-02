@@ -528,7 +528,7 @@ class AdvancedSimplifier:
         # Find the main verb and object
         # Pattern: Subject VERB Object
         subject_escaped = re.escape(subject)
-        pattern = rf'^(?:The\s+)?{subject_escaped}\s+(\w+)\s+(.+?)$'
+        pattern = rf'^(?:(?:The|A|An)\s+)?{subject_escaped}\s+(\w+)\s+(.+?)$'
         match = re.match(pattern, sentence, re.IGNORECASE)
 
         if match:
