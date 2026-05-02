@@ -105,6 +105,50 @@ export function render(ctx, engine, width, height) {
         ctx.restore();
     }
 
+    // 5.5. Seeking tendrils (neurons reaching out for connections)
+    if (lod !== 'FAR') {
+        for (const t of engine.seekingTendrils) {
+            const node = t.node;
+            if (!inView(node.x, node.y, t.maxLength + 20)) continue;
+
+            const r = node.radius * (node.appearProgress || 1);
+            const startX = node.x + Math.cos(t.angle) * r;
+            const startY = node.y + Math.sin(t.angle) * r;
+
+            const perpX = -Math.sin(t.angle);
+            const perpY = Math.cos(t.angle);
+            const waveOffset = Math.sin(t.wave) * (t.length * 0.08);
+            const endX = node.x + Math.cos(t.angle) * (r + t.length) + perpX * waveOffset;
+            const endY = node.y + Math.sin(t.angle) * (r + t.length) + perpY * waveOffset;
+
+            const midWave = Math.sin(t.wave * 0.7 + 1.5) * (t.length * 0.12);
+            const cpX = (startX + endX) / 2 + perpX * midWave;
+            const cpY = (startY + endY) / 2 + perpY * midWave;
+
+            const alpha = t.life * 0.45;
+
+            ctx.strokeStyle = `rgba(80, 220, 160, ${alpha})`;
+            ctx.lineWidth = Math.max(0.5, 1.2 / zoom);
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.quadraticCurveTo(cpX, cpY, endX, endY);
+            ctx.stroke();
+
+            // Glowing tip when near full extension
+            if (t.length >= t.maxLength * 0.8 && t.life > 0.3) {
+                const tipR = Math.max(1.5, 2.5 / zoom);
+                const glow = ctx.createRadialGradient(endX, endY, 0, endX, endY, tipR * 2.5);
+                glow.addColorStop(0, `rgba(100, 255, 180, ${alpha * 0.9})`);
+                glow.addColorStop(1, `rgba(80, 220, 140, 0)`);
+                ctx.fillStyle = glow;
+                ctx.beginPath();
+                ctx.arc(endX, endY, tipR * 2.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    }
+
     // 6. Potential edges as organic tendrils
     if (lod !== 'FAR') {
         const time = Date.now() / 1000;
@@ -297,6 +341,38 @@ export function render(ctx, engine, width, height) {
 
     // 13. Neuron cell bodies
     _drawNeurons(ctx, engine, lod, zoom, inView);
+
+    // 13.5. Seeking rings (rotating dashed circles around neurons trying to connect)
+    if (lod !== 'FAR') {
+        const seekTime = Date.now() / 1000;
+        const seekingNodeSet = new Set();
+        for (const pe of engine.potentialEdges) {
+            seekingNodeSet.add(pe.source);
+            seekingNodeSet.add(pe.target);
+        }
+        for (const node of engine.nodes) {
+            if (node.isLonely) seekingNodeSet.add(node);
+        }
+        for (const node of seekingNodeSet) {
+            if (!inView(node.x, node.y, node.radius + 20)) continue;
+            if ((node.appearProgress || 0) <= 0) continue;
+
+            const r = node.radius * (node.appearProgress || 1) + 6 / zoom;
+            const pulseAlpha = 0.25 + Math.sin(seekTime * 2.5) * 0.1;
+
+            ctx.save();
+            ctx.translate(node.x, node.y);
+            ctx.rotate(seekTime * 0.6);
+            ctx.setLineDash([3 / zoom, 7 / zoom]);
+            ctx.strokeStyle = `rgba(80, 220, 160, ${pulseAlpha})`;
+            ctx.lineWidth = Math.max(0.8, 1.3 / zoom);
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+    }
 
     // 14. Node labels
     if (lod !== 'FAR') {

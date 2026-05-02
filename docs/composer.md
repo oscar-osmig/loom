@@ -75,6 +75,20 @@ of "has"/"is". `_is_plural()` checks word endings and common irregular plurals.
 `gather_facts()` pulls `agreement_count` and `agreed_by` from MongoDB.
 Future: facts with higher agreement could be prioritized in responses.
 
+## "I Don't Know" Responses
+
+When all available facts for a concept are low-confidence, the composer returns an honest "I don't know" response instead of presenting unreliable information as truth.
+
+**`_check_knowledge_sufficiency()`** evaluates whether the gathered facts are reliable enough to compose a response. It returns an IDK response only when ALL facts for the concept have low confidence — if any fact is medium or high confidence, the composer proceeds normally.
+
+**`_IDK_TEMPLATES`** provides 4 varied templates for IDK responses:
+1. "I don't have confident information about {concept} yet."
+2. "I'm not sure enough about {concept} to give a reliable answer."
+3. "My knowledge of {concept} is still too uncertain — teach me more?"
+4. "I don't know enough about {concept} to say with confidence."
+
+Template selection is **deterministic via MD5 hash** of the concept name. This means the same concept always produces the same IDK phrasing, avoiding inconsistency across repeated queries while still varying across different concepts.
+
 ## Unified Query Handler
 
 `_check_composer_query` in `parser/base.py` handles:

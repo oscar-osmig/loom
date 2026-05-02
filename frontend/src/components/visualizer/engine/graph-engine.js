@@ -28,6 +28,8 @@ export class GraphEngine {
         this.pulseWaves = [];
         /** @type {Array<Object>} Brief spark flashes at potential connections */
         this.sparkEffects = [];
+        /** @type {Array<Object>} Tendrils extending from neurons seeking connections */
+        this.seekingTendrils = [];
 
         // Camera
         this.zoom = 1;
@@ -63,6 +65,7 @@ export class GraphEngine {
         this.transitiveGaps = [];
         this.lonelyNeurons = new Set(data.lonely_neurons || []);
         this.probeParticles = [];
+        this.seekingTendrils = [];
 
         const neurons = data.neurons || data.nodes || [];
         const synapses = data.synapses || data.edges || [];
@@ -634,7 +637,7 @@ export class GraphEngine {
     _updateProbeParticles() {
         // ---- Probe particles on potential edges ----
         if (this.isDiscovering && this.potentialEdges.length > 0) {
-            if (Math.random() < 0.08) {
+            if (Math.random() < 0.12) {
                 const edge = this.potentialEdges[Math.floor(Math.random() * this.potentialEdges.length)];
                 this.probeParticles.push({
                     edge,
@@ -679,7 +682,7 @@ export class GraphEngine {
 
         // ---- Pulse waves from nodes with potential connections ----
         if (this.isDiscovering && this.potentialEdges.length > 0 && this.pulseWaves.length < 6) {
-            if (Math.random() < 0.015) {
+            if (Math.random() < 0.03) {
                 const pe = this.potentialEdges[Math.floor(Math.random() * this.potentialEdges.length)];
                 const node = Math.random() < 0.5 ? pe.source : pe.target;
                 this.pulseWaves.push({
@@ -703,6 +706,43 @@ export class GraphEngine {
             const s = this.sparkEffects[i];
             s.life -= s.decay;
             if (s.life <= 0) this.sparkEffects.splice(i, 1);
+        }
+
+        // ---- Seeking tendrils from neurons trying to connect ----
+        const hasSeekingNodes = this.potentialEdges.length > 0 || this.lonelyNeurons.size > 0;
+        if (hasSeekingNodes && this.seekingTendrils.length < 25) {
+            if (Math.random() < 0.04) {
+                const candidates = [];
+                for (const pe of this.potentialEdges) {
+                    candidates.push(pe.source, pe.target);
+                }
+                for (const node of this.nodes) {
+                    if (node.isLonely) candidates.push(node);
+                }
+                if (candidates.length > 0) {
+                    const node = candidates[Math.floor(Math.random() * candidates.length)];
+                    this.seekingTendrils.push({
+                        node,
+                        angle: Math.random() * Math.PI * 2,
+                        length: 0,
+                        maxLength: 25 + Math.random() * 50,
+                        life: 1.0,
+                        growSpeed: 0.6 + Math.random() * 1.0,
+                        fadeSpeed: 0.012 + Math.random() * 0.008,
+                        wave: Math.random() * Math.PI * 2,
+                    });
+                }
+            }
+        }
+        for (let i = this.seekingTendrils.length - 1; i >= 0; i--) {
+            const t = this.seekingTendrils[i];
+            if (t.length < t.maxLength) {
+                t.length += t.growSpeed;
+            } else {
+                t.life -= t.fadeSpeed;
+            }
+            t.wave += 0.03;
+            if (t.life <= 0) this.seekingTendrils.splice(i, 1);
         }
     }
 }

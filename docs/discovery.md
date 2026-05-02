@@ -11,6 +11,17 @@ Both use spreading activation to find related concepts and weak inference patter
 
 ## Key Concepts
 
+### Thresholds & Constants
+
+Discovery uses tuned thresholds to balance sensitivity and noise:
+
+- **`MIN_PATTERN_SUPPORT = 3`** (lowered from 5) — minimum entity count to recognize a property cluster
+- **`MIN_DISCOVERY_CONFIDENCE = 0.6`** (lowered from 0.7) — minimum confidence to act on a discovered pattern
+- **`WEAK_NEURON_MAX_CONNECTIONS = 3`** — neurons with this many or fewer connections are considered weak
+- **`WEAK_NEURON_MAX_AVG_WEIGHT = 1.5`** — neurons whose average connection weight is at or below this are considered weak
+
+The lowered thresholds allow discovery to find patterns in smaller knowledge graphs where strict thresholds would miss valid connections.
+
 ### Property Clusters
 Groups of entities sharing 2+ properties. Example:
 - `cat`, `dog`, `lion` all have `fur` and `can_hunt`
@@ -49,6 +60,20 @@ Entities with similar relation patterns:
 Entities with few connections in knowledge graph.
 - May indicate incomplete learning or emergent specialization
 - Prioritized for curiosity exploration
+
+### Weak Neuron Strengthening
+
+`strengthen_weak_neurons(brain)` identifies neurons that are technically connected but underserved (at most `WEAK_NEURON_MAX_CONNECTIONS` connections with average weight at most `WEAK_NEURON_MAX_AVG_WEIGHT`) and attempts to strengthen them using three strategies:
+
+1. **Shared categories** — If weak neuron X and strong neuron Y share a parent category (`X is A`, `Y is A`), suggest a `similar_to` link between them
+2. **Properties** — If weak neuron X shares properties with other neurons (e.g., both `has fur`), suggest `similar_to` links based on property overlap
+3. **Activation** — Use spreading activation from the weak neuron to find related concepts that could form new connections
+
+Each suggestion goes through `_suggest_connection()`, a helper that performs quality checks before proposing a connection:
+- Verifies the connection does not already exist
+- Ensures it would not create a self-loop
+- Checks that the target entity actually exists in the knowledge graph
+- Validates that the proposed relation type is appropriate for the entities involved
 
 ### Bridges & Analogies
 - **Bridge neurons**: Intermediate concepts connecting disparate clusters

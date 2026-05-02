@@ -58,8 +58,10 @@ Factory function. Tries MongoDB first, falls back to JSON.
   - Returns facts with source_type "inference" or "inheritance"
   
 - `retract_fact(subject, relation, obj, cascade=False) → dict`
+  - Fetches the full document before deletion to capture its state
   - Removes fact; if cascade=True, also removes dependent facts
-  - Returns {retracted: bool, cascade_count: int, cascaded_facts: list}
+  - Returns {retracted: bool, cascade_count: int, cascaded_facts: list, old_properties: dict, old_context: str, old_object: str}
+  - The `old_properties`, `old_context`, and `old_object` fields preserve the deleted fact's metadata for correction provenance tracking
   
 - `remove_entity(entity) → int`
   - Removes all facts where entity is subject (not object)
@@ -242,13 +244,23 @@ storage = get_storage(use_mongo=False)  # JSON only
 - `speaker_id`: User who stated this fact
 - `derivation_id`: ID of inference that produced this
 
+### Retraction with Provenance Capture
+
+Both `MongoStorage.retract_fact()` and `JSONFallbackStorage.retract_fact()` now fetch the full document before deletion. The returned dict includes:
+
+- **`old_properties`**: The complete properties dict from the deleted fact (confidence, source_type, speaker_id, etc.)
+- **`old_context`**: The context scope of the deleted fact
+- **`old_object`**: The object value of the deleted fact
+
+This enables the correction handler to build a full provenance trail — the caller knows exactly what was retracted and can attach it to the replacement fact as correction history.
+
 ### Cascade Retraction
 
 When retracting a fact with `cascade=True`:
 1. Query `get_facts_depending_on()` to find dependents
 2. Recursively retract each dependent
 3. Delete the fact itself
-4. Return total cascade count
+4. Return total cascade count (plus `old_properties`, `old_context`, `old_object` from the root fact)
 
 ## Dependencies
 

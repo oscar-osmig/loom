@@ -165,6 +165,55 @@ Provenance tracking records the origin and dependencies of facts in the knowledg
 - **Inference:** May use provenance to decide retraction order
 - **Storage:** Provenance serialized in JSON/Mongo docs
 
+## Correction Provenance
+
+When a fact is corrected, the full correction chain is preserved so that every revision is traceable back to the original statement.
+
+### Correction History
+
+Corrected facts accumulate a `correction_history` list in their properties. Each entry records who made the correction, what the original value was, and when it happened. This list grows with each successive correction, forming a complete audit trail.
+
+### Original Speaker Tracking
+
+When a fact is corrected, the `original_speaker_id` from the retracted fact is carried forward onto the corrected fact's properties. This means the system always knows who first stated the fact, even after multiple corrections by different users.
+
+### `_build_correction_properties(retract_result, corrected_by)`
+
+Helper function in `handlers.py` that constructs the correction metadata for a replacement fact. It takes the result dict from `retract_fact()` (which includes `old_properties`, `old_context`, `old_object`) and the ID of the correcting user, then builds properties containing:
+
+- **`original_speaker_id`** — extracted from the retracted fact's `speaker_id`
+- **`corrected_by`** — the user who made this correction
+- **`original_value`** — the old object value that was replaced
+- **`correction_history`** — accumulated list of all prior corrections (carried forward from the retracted fact's existing history, plus the new correction entry)
+
+### Full Correction Chain Example
+
+```
+1. Alice teaches: "dogs are reptiles"
+   → properties: {speaker_id: "alice", source_type: "user"}
+
+2. Bob corrects: "actually, dogs are mammals"
+   → retract_fact("dogs", "is", "reptiles") returns old_properties with speaker_id="alice"
+   → _build_correction_properties(retract_result, corrected_by="bob")
+   → new fact properties: {
+       original_speaker_id: "alice",
+       corrected_by: "bob",
+       original_value: "reptiles",
+       source_type: "clarification",
+       correction_history: [
+         {original_value: "reptiles", corrected_by: "bob", original_speaker: "alice", timestamp: "..."}
+       ]
+     }
+
+3. Carol re-corrects: "dogs are canines"
+   → retract_fact("dogs", "is", "mammals") returns old_properties with correction_history
+   → correction_history grows:
+     [
+       {original_value: "reptiles", corrected_by: "bob", original_speaker: "alice", timestamp: "..."},
+       {original_value: "mammals", corrected_by: "carol", original_speaker: "alice", timestamp: "..."}
+     ]
+```
+
 ## Examples
 
 **User-stated fact provenance:**

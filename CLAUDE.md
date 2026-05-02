@@ -71,6 +71,8 @@ Input Text (single or paragraph)
     │  - Knowledge graph              │      MongoDB or JSON fallback
     │  - Connection weights           │
     │  - Hebbian strengthening        │
+    │  - Dormant neuron management    │
+    │  - Access tracking & staleness  │
     └────────────────┬────────────────┘
                      │
                      ▼
@@ -81,16 +83,18 @@ Input Text (single or paragraph)
     │  - Background transitive chains │
     │  - Property inheritance         │
     │  - Analogy detection            │
+    │  - Confidence-weighted chaining │
     └─────────────────────────────────┘
 ```
 
 **Key modules:**
-- `brain.py` - Core knowledge graph with Hebbian connection weights
+- `brain.py` - Core knowledge graph with Hebbian connection weights, dormant neuron management, access tracking, and staleness decay
+- `processing.py` - Fact processing pipeline with dormant neuron reactivation on re-mention
 - `activation.py` - Spreading activation network for fast connection discovery
 - `chunker.py` - Text chunking and RST discourse relation detection
 - `parser/` - Modular pattern recognition (see Parser Architecture below)
-- `inference.py` - Transitive chaining, property inheritance, analogy detection
-- `context.py` - Conversation state with salience-based coreference resolution
+- `inference.py` - Transitive chaining, property inheritance, analogy detection, confidence-weighted chain scoring
+- `context.py` - Conversation state with salience-based coreference resolution, entity disambiguation, and hypothetical mode
 - `storage/` - Dual-backend persistence layer
 
 ## Parser Architecture
@@ -180,6 +184,18 @@ Inference engine runs as a daemon thread, processing facts asynchronously every 
 **Sentence Simplifier (`simplifier.py`):** Breaks complex sentences (lists like "X need A, B, C", parallel structures, contrast patterns) into simple statements for parsing.
 
 **Speech Processing (`speech.py`):** Audio-to-text with pluggable ASR backends (Whisper local/API, Google, Azure, Vosk). Links spoken facts to audio metadata.
+
+**Dormant Neuron System (`brain.py`, `processing.py`):** Neurons and connections are never deleted, only marked dormant with auto-reactivation on re-mention. Core concepts (20+ accesses) are protected from dormancy.
+
+**Access Tracking (`brain.py`):** Tracks usage frequency and recency per entity. Concepts with 20+ accesses become core concepts, protected from dormancy and staleness. Every 5 accesses boosts connection weights.
+
+**Confidence-Weighted Inference (`inference.py`):** Product-based chain confidence replaces min-based. Co-activation blocked between low-confidence-only nodes. Configurable via `CONFIDENCE_WEIGHTS` and `MIN_CHAIN_CONFIDENCE`.
+
+**Entity Disambiguation (`context.py`):** Detects entity types (ENTITY_SELF, ENTITY_SYSTEM, ENTITY_THIRD_PARTY). Filters self/system references from coreference candidates.
+
+**Hypothetical Mode (`context.py`, `parser/base.py`):** Triggered by "what if"/"imagine"/"suppose". Facts tracked but not persisted. Auto-exits after definitive statements.
+
+**Staleness Decay (`brain.py`):** Concepts unused 24h+ lose one confidence level (never deleted). Skips core concepts. Runs via the inference background loop.
 
 
 ## Superskills Integration

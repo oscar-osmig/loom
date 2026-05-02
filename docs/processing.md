@@ -15,19 +15,31 @@ Hebbian learning follows the principle "cells that fire together wire together":
 ### Hebbian Connection Weights
 - **Initial weight**: 1.0 for new connections
 - **Strengthening**: +0.2 per co-activation (max 5.0)
-- **Decay**: -0.05 per unused cycle (pruned at < 0.1)
+- **Decay**: -0.05 per unused cycle (marked dormant at MIN_WEIGHT instead of deleted)
 - **Tracking**: `connection_weights[(subject, relation, object)] = weight`
 - **Timestamps**: `connection_times[(subject, relation, object)] = time.time()` for decay calculation
 
 Weights > 1.5 indicate strong, reliable facts. Use `show_weights` command to view.
+
+### Dormant Connection Handling
+
+Connections are never fully deleted. When `weaken_connection()` reduces a connection to `MIN_WEIGHT`, it is marked **dormant** rather than removed from the graph. This preserves the connection's history and allows it to be reactivated later if the same concepts become relevant again.
+
+- **`weaken_connection()`** marks a connection as dormant at `MIN_WEIGHT` instead of deleting it
+- **`reactivate_connection(key)`** restores a dormant connection back to active status with its initial weight
+- **`strengthen_connection()`** auto-reactivates dormant connections — if a dormant connection is strengthened, it is automatically brought back to active status before applying the strength increase
+- **`get_connection_weight()`** returns `0.0` for dormant connections, treating them as effectively absent for query purposes
+- **`get_strong_connections()`** skips dormant connections entirely when listing strong connections
+- **`_get_recent_avg_weight()`** skips dormant connections when computing average weight for recent connections
 
 ### Activation-Enhanced Processing
 When input is processed, the activation network spreads from mentioned entities to find related knowledge, then strengthens connections between co-activated concepts:
 
 1. Extract entities from input
 2. Activate them in the network
-3. Find co-activated nodes (multiple sources activating same node)
-4. Strengthen connections between co-activated pairs
+3. Call `_track_access()` for all entities in the input (updates access timestamps for decay tracking)
+4. Find co-activated nodes (multiple sources activating same node)
+5. Strengthen connections between co-activated pairs
 
 ### Advanced Simplification
 Complex sentences are broken into atomic facts before parsing:

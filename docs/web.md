@@ -127,6 +127,34 @@ dog , can , bark
 }
 ```
 
+#### `GET /api/corrections/<concept>`
+Returns the correction history for a given concept.
+
+**Response (JSON):**
+```json
+{
+  "concept": "dog",
+  "corrections": [
+    {
+      "subject": "dog",
+      "relation": "is",
+      "old_value": "reptile",
+      "new_value": "mammal",
+      "corrected_by": "alice",
+      "original_speaker": "bob",
+      "timestamp": "2026-04-15T..."
+    }
+  ],
+  "properties": {
+    "taught_by": "alice",
+    "source_type": "clarification",
+    "correction_count": 1
+  }
+}
+```
+
+Sources correction records from MongoDB and includes inline properties from the fact metadata. Returns an empty corrections list if no corrections exist for the concept.
+
 #### `GET /api/questions`
 Returns curiosity engine questions.
 
@@ -162,7 +190,12 @@ Returns knowledge graph data for visualization.
       "source": "dog",
       "target": "animal",
       "relation": "is",
-      "weight": 1.5
+      "weight": 1.5,
+      "taught_by": "alice",
+      "source_type": "user",
+      "corrected_by": null,
+      "original_value": null,
+      "correction_count": 0
     }
   ],
   "co_occurrences": [
@@ -204,6 +237,10 @@ Returns knowledge graph data for visualization.
    - Use `process_paragraph()` or `process_with_activation()`
    - Return response
 
+**Neuron Info (`get_neuron_info()`):**
+- Per-fact detail now includes `taught_by` (speaker_id), `source_type`, and `corrected_by` fields
+- Enables the frontend to display who taught each fact and whether it has been corrected
+
 **User-Scoped Forgetting:**
 - `forget_user_facts()` removes facts where `speaker_id` matches username
 - Works with both JSON and MongoDB storage
@@ -228,7 +265,7 @@ Returns knowledge graph data for visualization.
 2. Build incoming/outgoing connection counts
 3. Get fact creator (speaker_id) per node
 4. Create nodes with metadata (label, connections, relations, creators)
-5. Create edges with Hebbian weights
+5. Create edges with Hebbian weights and provenance metadata (`taught_by`, `source_type`, `corrected_by`, `original_value`, `correction_count`)
 6. Query discovery engine for:
    - Co-occurrence patterns
    - Discovered relation patterns

@@ -88,6 +88,7 @@
 
         ctx = canvas.getContext('2d');
         engine = new GraphEngine();
+        engine.isDiscovering = isDiscovering;
         engine.initGraph(data);
         resizeCanvas();
         engine.centerAndZoomToFit(width, height);

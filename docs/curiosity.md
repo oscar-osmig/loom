@@ -50,6 +50,7 @@ create_node(topic: str, context: str = "") -> CuriosityNode
 explore_node(topic: str) -> List[str]  # Return related concepts via spreading activation
 generate_hypotheses(topic: str) -> List[dict]
 resolve_node(topic: str, facts: List[dict] = None) -> bool
+resolve_from_knowledge(brain) -> int  # Resolve ACTIVE nodes when brain already has answers
 cleanup_expired() -> int
 
 # Queries
@@ -71,6 +72,7 @@ attempts: int = 0              # How many resolution attempts
 linked_facts: List[dict]       # Generated hypotheses
 status: CuriosityNodeStatus    # ACTIVE, EXPLORING, etc.
 related_concepts: Set[str]     # From spreading activation
+status_changed_at: float       # Timestamp of last status transition
 
 # Properties
 @property node_name -> str     # Returns "?_<topic>"
@@ -128,7 +130,11 @@ created_at: float              # When generated
 2. **Exploration**: Spreading activation spreads from topic to find related concepts (substring matching + activation network)
 3. **Hypothesis Generation**: Analyze related concepts for common patterns; if 2+ related concepts share a property, create hypothesis with confidence = min(0.9, count × 0.2)
 4. **Resolution**: User confirms or provides facts → add them with high confidence → retract curiosity node
-5. **Cleanup**: Check every 60s; remove expired nodes (age > 5min OR attempts ≥ 5)
+5. **Resolution from knowledge**: `resolve_from_knowledge(brain)` scans all ACTIVE nodes and checks whether the brain's knowledge graph already contains answers for their topics. If facts exist, the node is automatically resolved without user interaction.
+6. **Cleanup**: Check every 60s; enhanced timeout handling:
+   - EXPLORING nodes idle for >10 minutes are reset back to ACTIVE (uses `status_changed_at`)
+   - HYPOTHESIZING nodes idle for >30 minutes are reset back to ACTIVE (uses `status_changed_at`)
+   - Expired nodes (age > 5min OR attempts >= 5) are removed as before
 
 ### QuestionGenerator Flow
 

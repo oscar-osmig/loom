@@ -13,8 +13,19 @@ The InferenceEngine class (`loom/inference.py`) weaves new threads through reaso
 - **Property Relations**: Properties that propagate—has, can, color, size, shape, eats, lives_in, needs
 - **Property Inheritance**: Categories propagate properties to instances (category has property → instance inherits property)
 - **Syllogism**: If A→B and B→C (via transitive relation), infer A→C
+- **Confidence-Weighted Inference**: Chain confidence is the product of premise confidences along the path; chains below `MIN_CHAIN_CONFIDENCE` are discarded
+- **Co-activation Gating**: Co-activation connections are blocked when both participating nodes only have low-confidence facts
 - **Category Bridges**: Auto-detect category relationships (equivalent_to, subset_of, overlaps_with, similar_to)
 - **Analogy Detection**: Find similar concepts based on shared properties; infer missing properties via analogy
+
+## Constants
+
+- `CONFIDENCE_WEIGHTS = {'high': 1.0, 'medium': 0.7, 'low': 0.4}` — Maps confidence labels to numeric scores used in chain calculations
+- `MIN_CHAIN_CONFIDENCE = 0.3` — Minimum product-of-confidences for a chain to fire; chains below this are silently dropped
+- `TRANSITIVE_RELATIONS` — Relations that support chaining: looks_like, is, causes, leads_to, part_of
+- `CATEGORY_RELATIONS` — Relations that mark membership: is, is_a, type_of, kind_of
+- `PROPERTY_RELATIONS` — Relations that propagate: has, can, color, size, shape
+- `BRIDGE_RELATIONS` — Category bridging relations: equivalent_to, overlaps_with, subset_of, similar_to
 
 ## API / Public Interface
 
@@ -38,7 +49,7 @@ The InferenceEngine class (`loom/inference.py`) weaves new threads through reaso
 
 - `transitive_chain(start: str, relation: str, visited: set = None, depth: int = 0, max_depth: int = 5)` → `list`
   - Find all reachable nodes via transitive relation (with cycle detection)
-  - Returns list of `(target, depth)` tuples where depth is hop distance
+  - Returns list of `(target, depth, chain_confidence)` tuples where depth is hop distance and chain_confidence is the product of `CONFIDENCE_WEIGHTS` along the path
 
 - `_apply_syllogism(subject: str, relation: str)` → `None`
   - Apply hypothetical syllogism: if A→B→C, create A→C (with provenance)
@@ -46,6 +57,7 @@ The InferenceEngine class (`loom/inference.py`) weaves new threads through reaso
 
 - `_check_chain_from(subject: str, relation: str)` → `None`
   - Internal helper: find and infer all transitive targets from a subject
+  - Skips chains whose product-based confidence falls below `MIN_CHAIN_CONFIDENCE`
   - Creates inferred facts with provenance tracking chain premises
 
 - `_build_chain_premises(start: str, relation: str, end: str)` → `List[dict]`
@@ -56,6 +68,7 @@ The InferenceEngine class (`loom/inference.py`) weaves new threads through reaso
 
 - `_inherit_properties(instance: str, category: str)` → `None`
   - Immediate: inherit category's properties to instance
+  - Chain confidence = membership score × property score (product-based); skips when below `MIN_CHAIN_CONFIDENCE`
   - Example: dogs is mammals, mammals has fur → dogs inherits has fur
 
 - `_deep_inherit(instance: str, relation: str, depth: int = 0, max_depth: int = 3)` → `None`
@@ -64,6 +77,16 @@ The InferenceEngine class (`loom/inference.py`) weaves new threads through reaso
 
 - `_propagate_properties(subject: str)` → `None`
   - Copy properties across "looks_like" relationships (bidirectional)
+
+### Co-activation Gating
+
+- `_has_confident_facts(concept: str)` → `bool`
+  - Returns `True` if the concept has at least one fact with high or medium confidence
+  - Used by `_process_coactivation()` to gate speculative links
+
+- `_process_coactivation(subject: str, obj: str, coactivated: List[Tuple[str, float, Set[str]]])` → `None`
+  - Blocks co-activation connections when **both** subject and object only have low-confidence facts
+  - Prevents speculative inference chains from compounding weak evidence
 
 ### Analogy Detection
 
@@ -122,6 +145,28 @@ Called when `add_fact(subject, relation, obj)` completes:
 6. **Category Inheritance**: For "is" relations, inherit parent's properties immediately
 7. **Transitive Check**: For transitive relations, check and infer chains
 
+### Confidence-Weighted Inference
+
+Every inference chain computes a **product-based confidence score** from its premises:
+
+```
+Chain: A -[high]-> B -[medium]-> C
+Score: CONFIDENCE_WEIGHTS["high"] × CONFIDENCE_WEIGHTS["medium"] = 1.0 × 0.7 = 0.70
+Label: "medium" (0.5 ≤ score < 0.9)
+
+Chain: A -[low]-> B -[low]-> C
+Score: 0.4 × 0.4 = 0.16
+Result: DROPPED (0.16 < MIN_CHAIN_CONFIDENCE 0.3)
+```
+
+Confidence labels for inferred facts: `"high"` (≥ 0.9), `"medium"` (≥ 0.5), `"low"` (< 0.5).
+
+This applies to both `_check_chain_from()` (transitive syllogisms) and `_inherit_properties()` (category property propagation).
+
+### Co-activation Gating
+
+When spreading activation detects co-activated nodes, `_process_coactivation()` checks whether at least one of the participating concepts has a high or medium confidence fact (via `_has_confident_facts()`). If **both** nodes only carry low-confidence knowledge, the co-activation link is skipped to prevent speculative chains from compounding weak evidence.
+
 ### Background Inference (Asynchronous)
 
 Runs every 3 seconds in daemon thread (`_background_loop`):
@@ -131,9 +176,12 @@ Runs every 3 seconds in daemon thread (`_background_loop`):
 3. **Curiosity Cycle** (every 5 cycles = 15s) — generate questions
 4. **Curiosity Cleanup** (every 20 cycles = 60s) — expire old nodes
 5. **Forward Chaining** (every 3 cycles = 9s) — rule engine inference
-6. **Connection Discovery** (every 10 cycles = 30s) — find implicit connections
-7. **Category Bridges** (every 4 cycles = 12s) — detect category relationships
-8. **Frame Propagation** (every 5 cycles = 15s) — attribute slot inheritance
+6. **Connection Discovery** (every 5 cycles = 15s) — find implicit connections
+7. **Weak Neuron Strengthening** (every 8 cycles = 24s) — reinforce under-connected neurons
+8. **Category Bridges** (every 4 cycles = 12s) — detect category relationships
+9. **Frame Propagation** (every 5 cycles = 15s) — attribute slot inheritance
+10. **Curiosity Resolution** (every 10 cycles = 30s) — resolve curiosity nodes from learned knowledge
+11. **Staleness Decay** (every 100 cycles = ~5min) — decay unused concepts
 
 For each fact in `loom.recent` (batch added last cycle):
 1. **Apply Syllogism** (for transitive relations)
@@ -155,9 +203,9 @@ _apply_syllogism("dog", "needs"):
   _apply_syllogism("animal", "needs"):
     transitive_chain("animal", "needs"):
       - direct: [food]
-      - return [(food, 1)]
+      - return [(food, 1, 1.0)]   # (target, depth, chain_confidence)
     _check_chain_from("animal", "needs"):
-      chain = [(food, 1), ...]
+      chain = [(food, 1, 1.0), ...]
       since depth=1 but target in existing, don't infer
       
 # Inferred when fact is first added (immediate), not retroactively
@@ -230,7 +278,7 @@ loom.add_fact("animal", "needs", "food")
 
 # Transitive chain via hypothetical syllogism
 chain = loom.inference.transitive_chain("dog", "needs")
-print(chain)  # → [("food", 2)] — dog eventually needs food (2 hops)
+print(chain)  # → [("food", 2, 0.7)] — dog eventually needs food (2 hops, chain confidence 0.7)
 
 # Check if inferred fact exists
 print(loom.get("dog", "needs"))

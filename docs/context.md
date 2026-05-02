@@ -12,6 +12,14 @@ The context module maintains conversational state and enables coreference resolu
 
 **Entity Mention**: Wraps text, role (subject/object/other), turn number, animacy, plurality. Used internally for coreference resolution.
 
+**Entity Type Detection**: Classifies entities as `self`, `system`, or `third_party`. Self-references ("I", "me", "my") and system-references ("you", "loom", "system") are filtered out of coreference candidates so pronouns only resolve to third-party entities.
+
+**Hypothetical Mode**: Triggered by phrases like "what if", "imagine", "suppose". Facts stated during hypothetical mode are tracked in a separate `hypothetical_facts` list and are **not** persisted to the knowledge graph. The mode auto-exits after 2+ definitive (non-hypothetical) statements, and responses are prefixed with `[Hypothetical]`.
+
+**Topic Relevance Scoring**: Scores how related a new topic is to the current topic using knowledge graph connections (direct links, shared parents, shared relations, co-mentions).
+
+**Previous Topics**: A bounded history of the last 5 topics, enabling return to a prior topic when the conversation circles back.
+
 **Conversation Modes**: "normal", "teaching", "questioning", "correcting", "clarifying" — track dialogue state.
 
 **Dialogue Types**: "factual", "personal", "question", "opinion", "chit_chat" — categorize user intent.
@@ -21,6 +29,15 @@ The context module maintains conversational state and enables coreference resolu
 ## API / Public Interface
 
 ### context.py
+
+**Constants**:
+- `ENTITY_SELF = 'self'` — Entity type for first-person references
+- `ENTITY_SYSTEM = 'system'` — Entity type for system/assistant references
+- `ENTITY_THIRD_PARTY = 'third_party'` — Entity type for all other entities
+- `_SELF_WORDS` — Set of first-person words (`"i"`, `"me"`, `"my"`, `"myself"`, etc.)
+- `_SYSTEM_WORDS` — Set of system-referencing words (`"you"`, `"loom"`, `"system"`, etc.)
+
+**`detect_entity_type(word: str) -> str`**: Module-level function. Returns `ENTITY_SELF`, `ENTITY_SYSTEM`, or `ENTITY_THIRD_PARTY` based on whether `word` matches `_SELF_WORDS` or `_SYSTEM_WORDS`.
 
 **`ConversationContext(history_size: int = 10)`**: Main class. Initialize once per conversation.
 
@@ -33,6 +50,7 @@ The context module maintains conversational state and enables coreference resolu
 - Advances turn (increments current_turn)
 
 **`add_entity(text: str, role: str = 'other')`**: Track a mentioned entity with salience scoring.
+- Calls `detect_entity_type()` first; skips self/system references so they never become coreference candidates
 - Decays existing entities based on current_turn
 - Detects animacy (regex pattern) and plurality
 - Keeps top 15 entities by salience (to avoid memory bloat)
@@ -85,6 +103,32 @@ The context module maintains conversational state and enables coreference resolu
 **`get_recent_about(subject: str, limit: int = 3) -> list`**: Get recent statements about a subject.
 
 **`is_follow_up(text: str) -> bool`**: Check if text is a follow-up to previous statement (contains "also", "but", "because", etc.).
+
+**`check_hypothetical_trigger(text: str) -> bool`**: Check if text starts a hypothetical scenario.
+- Matches against `HYPOTHETICAL_TRIGGERS` (`"what if"`, `"imagine"`, `"suppose"`)
+- Returns `True` if a trigger phrase is found
+
+**`enter_hypothetical(trigger: str = None)`**: Enter hypothetical mode.
+- Sets `hypothetical_mode = True`
+- Records the trigger phrase in `_hypothetical_trigger`
+- Initializes empty `hypothetical_facts` list
+
+**`exit_hypothetical()`**: Exit hypothetical mode.
+- Sets `hypothetical_mode = False`
+- Clears `hypothetical_facts` and `_hypothetical_trigger`
+
+**`is_hypothetical`** *(property)*: Returns `True` if currently in hypothetical mode.
+
+**`topic_relevance_score(new_topic: str, current_topic: str) -> float`**: Score how related two topics are using the knowledge graph.
+- Direct connection between topics: +0.5
+- Shared parent concepts: +0.3
+- Each shared relation: +0.05
+- Co-mention in recent statements: +0.3
+- Requires knowledge graph reference (via `set_knowledge_ref`)
+
+**`get_previous_topic() -> Optional[str]`**: Return the most recent previous topic without removing it.
+
+**`return_to_previous_topic() -> Optional[str]`**: Pop and return the most recent previous topic, restoring it as the current topic.
 
 **`get_salient_entities(limit: int = 5) -> List[Tuple[str, float]]`**: Get most salient entities in context (decayed).
 
@@ -141,6 +185,44 @@ Text is categorized into one of 5 types:
 
 Used to set conversation mode and adjust parsing strategy.
 
+### Entity Type Filtering
+
+When `add_entity()` is called, the text is first passed through `detect_entity_type()`:
+1. If the word is in `_SELF_WORDS` (e.g., "I", "me", "my"), it is classified as `ENTITY_SELF` and **skipped**
+2. If the word is in `_SYSTEM_WORDS` (e.g., "you", "loom", "system"), it is classified as `ENTITY_SYSTEM` and **skipped**
+3. Otherwise it is `ENTITY_THIRD_PARTY` and added normally with salience scoring
+
+This prevents "I" or "you" from appearing as coreference candidates when resolving pronouns like "it" or "they".
+
+### Hypothetical Mode
+
+1. `check_hypothetical_trigger(text)` scans input against `HYPOTHETICAL_TRIGGERS` (`"what if"`, `"imagine"`, `"suppose"`)
+2. If triggered, `enter_hypothetical()` activates the mode and records the trigger phrase
+3. While `hypothetical_mode` is `True`, facts are appended to `hypothetical_facts` instead of being persisted to the knowledge graph
+4. Responses generated during hypothetical mode are prefixed with `[Hypothetical]`
+5. The mode **auto-exits** after 2 or more consecutive definitive (non-hypothetical) statements
+6. Can also be exited explicitly via `exit_hypothetical()`
+
+### Topic Relevance Scoring
+
+`topic_relevance_score(new_topic, current_topic)` computes a float score using the knowledge graph:
+
+| Signal | Score |
+|--------|-------|
+| Direct connection between topics | +0.5 |
+| Shared parent concepts | +0.3 |
+| Each shared relation | +0.05 |
+| Co-mentioned in recent statements | +0.3 |
+
+Higher scores indicate the new topic is closely related to the current one, which can inform whether to push the current topic or treat the shift as a natural continuation.
+
+### Previous Topics
+
+`previous_topics` is a `deque(maxlen=5)` that stores displaced topics when the conversation shifts:
+- When `update()` detects a new main subject, the old topic is pushed onto `previous_topics`
+- `get_previous_topic()` peeks at the most recent entry without removing it
+- `return_to_previous_topic()` pops the most recent entry and restores it as the current topic
+
 ### Context Detection Patterns
 
 **Scientific**: Detects "biologically", "species", "taxonomy", "molecule", "organism", etc.
@@ -158,6 +240,7 @@ Returns the first matching context; default is "general".
 ## Dependencies
 
 - **context.py imports**: `time`, `collections.deque`, `typing`, `re`
+- **context.py constants**: `ENTITY_SELF`, `ENTITY_SYSTEM`, `ENTITY_THIRD_PARTY`, `_SELF_WORDS`, `_SYSTEM_WORDS`, `HYPOTHETICAL_TRIGGERS`
 - **context_detection.py imports**: `re`
 - **Used by**: `parser/base.py`, `main.py`, `brain.py` (all reference ConversationContext)
 - **Used by**: `parser/` modules use context detection to tag facts with qualifiers
@@ -203,6 +286,56 @@ from loom.context_detection import detect_context, detect_temporal
 detect_context("Biologically, birds have feathers")     # → "scientific"
 detect_temporal("Dogs used to live in the wild")        # → "past"
 detect_temporal("Most cats are independent")            # Returns "always" (default)
+```
+
+### Entity Type Detection
+```python
+from loom.context import detect_entity_type, ENTITY_SELF, ENTITY_SYSTEM, ENTITY_THIRD_PARTY
+
+detect_entity_type("I")      # → 'self'
+detect_entity_type("you")    # → 'system'
+detect_entity_type("dog")    # → 'third_party'
+
+ctx = ConversationContext()
+ctx.add_entity("I", role="subject")      # Skipped (self-reference)
+ctx.add_entity("dog", role="subject")    # Added normally
+ctx.get_salient_entities()               # Only contains "dog"
+```
+
+### Hypothetical Mode
+```python
+ctx = ConversationContext()
+
+ctx.check_hypothetical_trigger("what if dogs could fly?")  # → True
+ctx.enter_hypothetical("what if")
+ctx.is_hypothetical                                         # → True
+
+# Facts during this mode go to hypothetical_facts, not the knowledge graph
+# Responses are prefixed with [Hypothetical]
+
+# After 2+ definitive statements, mode auto-exits
+ctx.exit_hypothetical()
+ctx.is_hypothetical                                         # → False
+```
+
+### Topic Relevance Scoring
+```python
+ctx = ConversationContext()
+ctx.set_knowledge_ref(brain.knowledge)
+
+# If "dog" and "cat" are both connected to "animal" in the graph:
+score = ctx.topic_relevance_score("cat", "dog")
+# score includes +0.3 for shared parent "animal"
+```
+
+### Previous Topics
+```python
+ctx = ConversationContext()
+ctx.update("dog", "is", "animal")       # topic = "dog"
+ctx.update("cat", "is", "animal")       # topic = "cat", "dog" pushed to previous_topics
+
+ctx.get_previous_topic()                # → "dog"
+ctx.return_to_previous_topic()          # → "dog", topic restored to "dog"
 ```
 
 ### Clarification Workflow
