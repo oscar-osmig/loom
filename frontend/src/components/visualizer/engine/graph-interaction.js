@@ -13,7 +13,7 @@
  * @returns {() => void} Cleanup function that removes all listeners.
  */
 export function attachInteractions(canvas, engine, callbacks = {}) {
-    const { onNodeSelect, onNodeHover } = callbacks;
+    const { onNodeSelect, onNodeHover, onContextMenu } = callbacks;
 
     // --- state ---
     let isPanning = false;
@@ -274,6 +274,21 @@ export function attachInteractions(canvas, engine, callbacks = {}) {
         }
     }
 
+    // ============================================================ context menu
+
+    function onRightClick(e) {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        const world = engine.screenToWorld(sx, sy);
+        const node = engine.getNodeAt(world.x, world.y);
+
+        if (node && onContextMenu) {
+            onContextMenu(node, { x: e.clientX, y: e.clientY });
+        }
+    }
+
     // ============================================================ attach
 
     canvas.addEventListener('mousedown', onMouseDown);
@@ -281,6 +296,7 @@ export function attachInteractions(canvas, engine, callbacks = {}) {
     canvas.addEventListener('mouseup', onMouseUp);
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('dblclick', onDblClick);
+    canvas.addEventListener('contextmenu', onRightClick);
     canvas.addEventListener('mouseleave', onMouseLeave);
 
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -295,6 +311,7 @@ export function attachInteractions(canvas, engine, callbacks = {}) {
         canvas.removeEventListener('mouseup', onMouseUp);
         canvas.removeEventListener('wheel', onWheel);
         canvas.removeEventListener('dblclick', onDblClick);
+        canvas.removeEventListener('contextmenu', onRightClick);
         canvas.removeEventListener('mouseleave', onMouseLeave);
 
         canvas.removeEventListener('touchstart', onTouchStart);

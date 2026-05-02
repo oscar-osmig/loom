@@ -31,6 +31,9 @@
     // Detail panel (selected neuron)
     let detailNode = $state(null);
 
+    // Context menu
+    let contextMenu = $state(null); // { node, x, y }
+
     // Zoom display
     let zoomPercent = $state(100);
 
@@ -96,6 +99,7 @@
         cleanupInteractions = attachInteractions(canvas, engine, {
             onNodeSelect: handleNodeSelect,
             onNodeHover: handleNodeHover,
+            onContextMenu: handleContextMenu,
         });
 
         loading = false;
@@ -171,6 +175,47 @@
 
     function handleNodeHover(_node) {}
 
+    function handleContextMenu(node, pos) {
+        contextMenu = { node, x: pos.x, y: pos.y };
+    }
+
+    function closeContextMenu() {
+        contextMenu = null;
+    }
+
+    function copyNeuronData() {
+        if (!contextMenu) return;
+        const node = contextMenu.node;
+        const relations = getNodeRelations(node);
+        const grouped = groupRelations(relations);
+
+        let text = `${node.label}\n`;
+        text += `${'='.repeat(node.label.length)}\n`;
+        text += `Connections: ${node.connections}\n`;
+        if (node.isSystem) text += `Type: system\n`;
+        if (node.isLonely) text += `Type: isolated\n`;
+        if (node.creators?.length) text += `Created by: ${node.creators.join(', ')}\n`;
+        if (node.correctors?.length) text += `Corrected by: ${node.correctors.join(', ')}\n`;
+
+        if (Object.keys(grouped).length > 0) {
+            text += `\nRelations:\n`;
+            for (const [relType, rels] of Object.entries(grouped)) {
+                for (const rel of rels) {
+                    if (rel.direction === 'out') {
+                        text += `  ${node.id} —[${relType}]→ ${rel.target}`;
+                    } else {
+                        text += `  ${rel.target} —[${relType}]→ ${node.id}`;
+                    }
+                    if (rel.weight > 1) text += ` (weight: ${rel.weight.toFixed(1)})`;
+                    text += `\n`;
+                }
+            }
+        }
+
+        navigator.clipboard.writeText(text.trim());
+        contextMenu = null;
+    }
+
     function closeDetail() {
         detailNode = null;
         if (engine) engine.selectedNode = null;
@@ -220,7 +265,8 @@
     function handleKeydown(e) {
         if (!ui.vizOpen) return;
         if (e.key === 'Escape') {
-            if (detailNode) closeDetail();
+            if (contextMenu) closeContextMenu();
+            else if (detailNode) closeDetail();
             else if (searchOpen) { searchQuery = ''; searchResults = []; searchOpen = false; }
             else setVizOpen(false);
         }
@@ -401,6 +447,21 @@
                         <div class="detail-empty">No connections found.</div>
                     {/if}
                 </div>
+            </div>
+        {/if}
+
+        <!-- Context menu -->
+        {#if contextMenu}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="ctx-backdrop" onclick={closeContextMenu}></div>
+            <div class="ctx-menu" style="left: {contextMenu.x}px; top: {contextMenu.y}px;">
+                <div class="ctx-header">{contextMenu.node.label}</div>
+                <button class="ctx-item" onclick={copyNeuronData}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                    Copy neuron data
+                </button>
             </div>
         {/if}
 
@@ -668,6 +729,37 @@
         padding: 0.75rem 0; font-size: 0.8125rem;
         color: rgba(200,210,230,0.35); font-style: italic;
     }
+
+    /* ============ Context menu */
+    .ctx-backdrop {
+        position: fixed; inset: 0; z-index: 230;
+    }
+    .ctx-menu {
+        position: fixed; z-index: 231;
+        background: rgba(15, 15, 30, 0.95);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 10px; overflow: hidden;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        min-width: 180px;
+        animation: ctx-in 0.12s ease-out;
+    }
+    @keyframes ctx-in {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+    }
+    .ctx-header {
+        padding: 0.5rem 0.75rem; font-size: 0.75rem; font-weight: 600;
+        color: rgba(200,210,230,0.5); text-transform: capitalize;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .ctx-item {
+        display: flex; align-items: center; gap: 0.5rem; width: 100%;
+        padding: 0.5rem 0.75rem; background: none; border: none;
+        color: rgba(220,230,245,0.85); font-size: 0.8125rem; font-family: inherit;
+        cursor: pointer; text-align: left; transition: background 0.12s;
+    }
+    .ctx-item:hover { background: rgba(100,200,255,0.12); }
+    .ctx-item svg { color: rgba(200,210,230,0.5); flex-shrink: 0; }
 
     /* ============ Empty state */
     .viz-empty {
