@@ -111,7 +111,8 @@ def _check_where_query(parser, t: str) -> str | None:
                 return f"{subj.title()} {verb} found in {loc_str}."
 
     parser.loom.add_fact(subj, "has_open_question", "location")
-    return f"I don't know where {subj} is. Where can it be found?"
+    verb = "are" if is_plural(subj) else "is"
+    return f"I don't know where {subj} {verb}. Where can it be found?"
 
 
 def _check_what_lives_query(parser, t: str) -> str | None:
@@ -444,14 +445,24 @@ def _check_what_does_query(parser, t: str) -> str | None:
     """Handle 'what does X verb?' queries — works with ANY verb, not just known ones."""
     from .relations import get_relation_for_verb
 
-    # Match "what does/do X verb [preposition]?" with any verb
-    match = re.match(r"what do(?:es)?\s+(.+?)\s+(\w+)(?:\s+(\w+))?\s*\??$", t)
+    # Match "what does/do X verb [preposition]?" — use greedy subject to handle
+    # multi-word subjects like "habitat loss", "sea turtles"
+    match = re.match(r"what do(?:es)?\s+(.+)\s+(\w+)\s*\??$", t)
     if not match:
         return None
 
     subj = match.group(1).strip()
     verb = match.group(2).strip()
-    prep = match.group(3)  # Optional preposition (e.g., "live in")
+    prep = None
+
+    # If 'verb' is actually a preposition, re-split: last word of subj becomes verb
+    _PREPOSITIONS = {"in", "on", "at", "to", "from", "with", "by", "for", "about", "into", "through"}
+    if verb in _PREPOSITIONS:
+        parts = subj.rsplit(None, 1)
+        if len(parts) == 2:
+            subj, real_verb = parts
+            prep = verb
+            verb = real_verb
 
     # Skip if verb is "do" (handled by _check_what_do_generic_query)
     if verb == "do":

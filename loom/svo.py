@@ -306,6 +306,14 @@ def extract_svo(text: str) -> Optional[dict]:
 
     # ─── Strategy 2: Content verb detection by morphology ───
     # "Valdoria exports coffee" -> exports(Valdoria, coffee)
+    # Collect all verb candidates, prefer known relation verbs over morphological guesses.
+    # This prevents plural nouns like "turtles" from being picked over actual verbs like "eats".
+    candidates = []
+    try:
+        from .parser.relations import RELATION_BY_ANY_VERB
+    except ImportError:
+        RELATION_BY_ANY_VERB = {}
+
     for i, w in enumerate(words):
         if _looks_like_verb(w, i, words):
             subject = " ".join(words[:i])
@@ -321,14 +329,20 @@ def extract_svo(text: str) -> Optional[dict]:
                     obj = " ".join(obj_words[1:])
 
             if subject and obj:
-                return {
+                is_known = w.lower() in RELATION_BY_ANY_VERB
+                candidates.append((is_known, i, {
                     "subject": subject,
                     "verb": w.lower(),
                     "relation": _normalize_verb_to_relation(verb_word),
                     "object": obj,
                     "passive": False,
                     "auxiliary": None,
-                }
+                }))
+
+    if candidates:
+        # Prefer known relation verbs; among equals, take the first positionally
+        candidates.sort(key=lambda c: (not c[0], c[1]))
+        return candidates[0][2]
 
     return None
 

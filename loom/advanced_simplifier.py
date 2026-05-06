@@ -125,6 +125,18 @@ class AdvancedSimplifier:
 
             return []  # Skip complex "their" sentences we can't parse
 
+        # Split "but" coordination into separate clauses
+        # e.g., "Cats can climb, but eagles cannot fly" -> two statements
+        but_parts = re.split(r',\s*but\s+|\s+but\s+', sentence)
+        if len(but_parts) > 1:
+            all_results = []
+            for part in but_parts:
+                part = part.strip().rstrip('.')
+                if part:
+                    all_results.append(part)
+            if all_results:
+                return self._clean_results(all_results)
+
         results = []
 
         # ENCYCLOPEDIC SENTENCE DETECTION
@@ -707,7 +719,7 @@ class AdvancedSimplifier:
             r'\bhave\s+caused\b',  # "have caused" without proper subject
             r'\bexhibit\s+several\b',  # "exhibit several" - abstract description
             r'\bseveral\s+fascinating\s+physiological',  # specific bad phrase
-            r'\bpopulation\s+decline',  # too abstract as object
+            # 'population decline' removed — valid object in causal statements
             r'^while\s',  # sentences starting with "while"
             r'^sadly[,\s]',  # sentences starting with "sadly"
             r'^fortunately[,\s]',  # sentences starting with "fortunately"
@@ -734,7 +746,7 @@ class AdvancedSimplifier:
             'caused', 'single', 'several', 'few', 'other', 'another',
             'overall', 'interestingly', 'however', 'therefore', 'thus',
             'a', 'an', 'even',  # articles and modifiers
-            'hunting',  # gerunds that lead to abstract facts
+            # 'hunting' removed — valid subject in causal statements
             'and', 'or', 'but', 'while', 'although', 'sadly', 'fortunately',
             'unfortunately', 'conservation', 'social',  # abstract concepts
             'male', 'female',  # gendered subjects need proper resolution

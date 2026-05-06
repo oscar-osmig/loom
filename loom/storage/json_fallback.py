@@ -433,6 +433,18 @@ class JSONFallbackStorage:
         """Load frame data."""
         return self._data.get("frames", {})
 
+    def delete_user_facts(self, username: str) -> int:
+        """Remove all facts created by a specific user. Returns count deleted."""
+        before = len(self._data["facts"])
+        self._data["facts"] = [
+            f for f in self._data["facts"]
+            if f.get("properties", {}).get("speaker_id") != username
+        ]
+        count = before - len(self._data["facts"])
+        if count > 0:
+            self._save()
+        return count
+
     def forget_all(self):
         self._data = {
             "facts": [],

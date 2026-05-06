@@ -60,6 +60,18 @@
         else closeVisualizer();
     });
 
+    // React to graph resets (forget commands) — re-fetch fresh data
+    let lastGraphVersion = ui.graphVersion;
+    $effect(() => {
+        const v = ui.graphVersion;
+        if (v !== lastGraphVersion) {
+            lastGraphVersion = v;
+            if (ui.vizOpen && engine) {
+                refreshGraphData();
+            }
+        }
+    });
+
     $effect(() => {
         return () => {
             cancelAnimationFrame(animFrameId);

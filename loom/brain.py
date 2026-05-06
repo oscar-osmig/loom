@@ -1510,6 +1510,71 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         if inference_was_running and hasattr(self, 'inference'):
             self.inference.running = True
 
+    def forget_user(self, username: str) -> int:
+        """Remove all facts created by a specific user and rebuild in-memory state."""
+        # Pause background inference
+        inference_was_running = False
+        if hasattr(self, 'inference') and self.inference.running:
+            inference_was_running = True
+            self.inference.running = False
+
+        # Delete user's facts from storage
+        count = self.storage.delete_user_facts(username)
+
+        if count > 0:
+            # Rebuild all in-memory state from remaining storage
+            self._invalidate_cache()
+            self._knowledge_cache = None
+            self.conflicts = []
+            self.recent = []
+
+            if hasattr(self, 'inference'):
+                self.inference.inferences = []
+                self.inference._recent_inferences = set()
+
+            # Reset contexts
+            self._context_pool.clear()
+            self._context_pool["_default"] = ConversationContext(conversation_id="_default")
+            self._current_conversation_id = "_default"
+
+            if hasattr(self, 'frame_manager'):
+                self.frame_manager.reset()
+                self.frame_manager.hydrate_from_knowledge()
+
+            if hasattr(self, 'discovery_engine'):
+                self.discovery_engine._patterns.clear()
+                self.discovery_engine._co_occurrence.clear()
+                self.discovery_engine._created_neurons.clear()
+                self.discovery_engine._pending_neurons.clear()
+                self.discovery_engine._stats = {
+                    "patterns_found": 0, "neurons_created": 0,
+                    "relations_added": 0, "scans_completed": 0,
+                }
+
+            if hasattr(self, 'activation'):
+                self.activation.activations.clear()
+                self.activation.activation_sources.clear()
+                self.activation.activation_times.clear()
+                self.activation.activation_history.clear()
+                self.activation.assemblies.clear()
+                self.activation.coactivation_counts.clear()
+                self.activation.topic_concepts.clear()
+
+            # Rebuild weights/access from remaining knowledge
+            self.connection_weights.clear()
+            self.connection_times.clear()
+            self.dormant_connections.clear()
+            self.dormant_entities.clear()
+            self.access_counts.clear()
+            self.last_accessed.clear()
+            self.core_concepts.clear()
+
+        # Resume background inference
+        if inference_was_running and hasattr(self, 'inference'):
+            self.inference.running = True
+
+        return count
+
     def show_conflicts(self):
         """Display detected conflicts."""
         print("\n  +-- Detected Conflicts -------------------------+")

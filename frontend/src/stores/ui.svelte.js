@@ -24,6 +24,7 @@ export const ui = $state({
     leaderboardOpen: false,
     loadResultsData: null,
     headerLocked: !isLoggedIn(),
+    graphVersion: 0,
 });
 
 export function showInfoPanel(title, content) {
@@ -50,3 +51,7 @@ export function setLeaderboardOpen(value) { ui.leaderboardOpen = value; if (valu
 export function showLoadResults(data) { ui.loadResultsData = data; ui.loadResultsOpen = true; ui.aboutOpen = false; ui.settingsOpen = false; ui.stylePageOpen = false; ui.leaderboardOpen = false; }
 export function closeLoadResults() { ui.loadResultsOpen = false; ui.loadResultsData = null; }
 export function setHeaderLocked(value) { ui.headerLocked = value; }
+export function triggerGraphReset() {
+    ui.graphVersion++;
+    try { sessionStorage.removeItem('loom_graph_layout'); } catch {}
+}

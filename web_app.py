@@ -51,21 +51,7 @@ def loom_icon():
 
 def forget_user_facts(username: str) -> int:
     """Remove all facts created by a specific user."""
-    result = loom.storage.db.facts.delete_many({
-        "instance": loom.storage.instance_name,
-        "properties.speaker_id": username
-    })
-    count = result.deleted_count
-
-    # Rebuild in-memory cache
-    if count > 0:
-        loom._invalidate_cache()
-        # Rebuild frame manager from remaining knowledge
-        if hasattr(loom, 'frame_manager'):
-            loom.frame_manager.reset()
-            loom.frame_manager.hydrate_from_knowledge()
-
-    return count
+    return loom.forget_user(username)
 
 
 def _process_training_file(file) -> dict:
@@ -261,7 +247,8 @@ def chat():
                 facts_after = loom.storage.get_fact_count()
                 return jsonify({
                     'response': f'All memory erased. Removed {facts_before} facts, rebuilt {facts_after} system neurons. Starting fresh.',
-                    'type': 'info'
+                    'type': 'info',
+                    'action': 'graph_reset'
                 })
             except Exception as e:
                 return jsonify({'response': f'Error during forget-all: {e}', 'type': 'error'})
@@ -269,7 +256,11 @@ def chat():
         elif cmd == 'forget':
             if user:
                 count = forget_user_facts(user)
-                return jsonify({'response': f'Erased {count} of your facts.', 'type': 'info'})
+                return jsonify({
+                    'response': f'Erased {count} of your facts.',
+                    'type': 'info',
+                    'action': 'graph_reset'
+                })
             else:
                 return jsonify({'response': 'No user identified. Sign in first.', 'type': 'error'})
 
@@ -383,20 +374,25 @@ def chat():
         if '. ' in message or len(message) > 100:
             # Paragraph processing
             result = loom.process_paragraph(message)
-            response = f"Processed {result['chunks_processed']} chunks. Theme: {result['theme'] or 'general'}"
 
-            # Add individual responses if verbose
             if result['responses']:
-                main_response = result['responses'][0] if result['responses'] else response
-                return jsonify({
-                    'response': main_response,
-                    'type': 'response',
-                    'meta': {
-                        'chunks': result['chunks_processed'],
-                        'facts_added': result['facts_added'],
-                        'theme': result['theme']
-                    }
-                })
+                # Use the most meaningful response from processing
+                main_response = result['responses'][0]
+            elif result['facts_added'] > 0:
+                theme = result['theme'] or 'that'
+                main_response = f"Got it — I've learned about {theme}."
+            else:
+                main_response = loom.process_with_activation(message)
+
+            return jsonify({
+                'response': main_response,
+                'type': 'response',
+                'meta': {
+                    'chunks': result['chunks_processed'],
+                    'facts_added': result['facts_added'],
+                    'theme': result['theme']
+                }
+            })
         else:
             # Single statement
             response = loom.process_with_activation(message)
@@ -1055,7 +1051,7 @@ def get_graph():
         # Get missing properties
         missing_properties = discovery_data.get('missing_properties', [])
 
-    return jsonify({
+    resp = jsonify({
         'nodes': nodes,
         'edges': edges,
         'co_occurrences': co_occurrences,
@@ -1067,6 +1063,10 @@ def get_graph():
         'lonely_neurons': discovery_data.get('lonely_neurons', []),
         'statistics': discovery_data.get('statistics', {})
     })
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/api/corrections/<concept>', methods=['GET'])

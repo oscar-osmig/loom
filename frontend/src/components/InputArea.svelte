@@ -1,7 +1,7 @@
 <script>
     import { auth, isAuthenticated, setUser } from '../stores/auth.svelte.js';
     import { addMessage, setTyping, clearMessages, conversationId } from '../stores/chat.svelte.js';
-    import { showInfoPanel, setHeaderLocked, setStylePageOpen, setVizOpen, setAboutOpen, showLoadResults } from '../stores/ui.svelte.js';
+    import { showInfoPanel, setHeaderLocked, setStylePageOpen, setVizOpen, setAboutOpen, showLoadResults, triggerGraphReset } from '../stores/ui.svelte.js';
     import { showSpinner, hideSpinner } from '../stores/training.svelte.js';
     import { showToast } from '../stores/toast.svelte.js';
     import { sendChat, uploadTrainingBatch } from '../lib/api.js';
@@ -113,10 +113,13 @@
 
             const responseType = data.type || 'response';
 
-            // Forget commands: clear chat and show confirmation inline
+            // Forget commands: clear chat, reset graph, show confirmation
             if (isForget && responseType === 'info') {
                 clearMessages();
                 addMessage(data.response, 'info');
+                if (data.action === 'graph_reset') {
+                    triggerGraphReset();
+                }
                 return;
             }
 

@@ -1014,18 +1014,15 @@ class ConnectionDiscoveryEngine:
         e1 = pattern.entities[0]
         e2 = pattern.entities[1] if len(pattern.entities) > 1 else None
 
-        # Only add similarity-type relations (safe, don't pollute core knowledge)
+        # Add discovery relations (quality-gated by _add_discovered_relation)
         if pattern.pattern_type == "cluster" and e2:
             self._add_discovered_relation(e1, "similar_to", e2, pattern.confidence)
         elif pattern.pattern_type == "path_similar" and e2:
             self._add_discovered_relation(e1, "related_to", e2, pattern.confidence)
-        # DISABLED: These were too aggressive and caused pollution
-        # elif pattern.pattern_type == "co_occurrence" and e2:
-        #     self._add_discovered_relation(e1, "associated_with", e2, pattern.confidence)
-        # elif pattern.pattern_type == "transitive_gap" and e2:
-        #     ...
-        # elif pattern.pattern_type == "missing_property":
-        #     ...
+        elif pattern.pattern_type == "co_occurrence" and e2:
+            self._add_discovered_relation(e1, "associated_with", e2, pattern.confidence)
+        elif pattern.pattern_type == "transitive_gap" and e2:
+            self._add_discovered_relation(e1, "related_to", e2, pattern.confidence)
 
     def _is_valid_entity(self, name: str) -> bool:
         """Check if an entity name is valid (not polluted/malformed)."""

@@ -598,6 +598,14 @@ class MongoStorage:
 
     # ==================== ADMIN ====================
 
+    def delete_user_facts(self, username: str) -> int:
+        """Remove all facts created by a specific user. Returns count deleted."""
+        result = self.db.facts.delete_many({
+            "instance": self.instance_name,
+            "properties.speaker_id": username
+        })
+        return result.deleted_count
+
     def forget_all(self):
         """Clear ALL data for this instance — every collection."""
         inst = {"instance": self.instance_name}

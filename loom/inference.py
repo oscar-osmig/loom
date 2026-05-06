@@ -169,13 +169,14 @@ class InferenceEngine:
 
             # Check if both subject and object contributed
             if subject in sources and obj in sources:
-                # Avoid speculative inference: require at least one node
-                # with high or medium confidence facts
-                if not (self._has_confident_facts(subject) or
-                        self._has_confident_facts(obj)):
+                # Require at least one node to have ANY known facts
+                # (prevents links between completely unknown concepts)
+                subj_facts = self.loom.knowledge.get(subject, {})
+                obj_facts = self.loom.knowledge.get(obj, {})
+                if not subj_facts and not obj_facts:
                     if self.loom.verbose:
                         print(f"       [skipped co-activation: {subject} & {obj} "
-                              f"— both lack confident facts]")
+                              f"— neither has any facts]")
                     continue
 
                 # This node is co-activated by both - they share something
@@ -189,8 +190,8 @@ class InferenceEngine:
                         self.loom.strengthen_connection(subject, "related_through", node)
                         self.loom.strengthen_connection(obj, "related_through", node)
 
-                    # Persist strong co-activations as facts so they survive decay
-                    if level >= 0.5:
+                    # Persist co-activations as facts so they survive decay
+                    if level >= 0.3:
                         for src, bridge in ((subject, node), (obj, node)):
                             existing = self.loom.get(src, "related_through") or []
                             if bridge not in existing:

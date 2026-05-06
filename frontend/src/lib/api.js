@@ -43,7 +43,9 @@ export async function sendChat(message, user, email, conversationId) {
  */
 export async function fetchGraph() {
     try {
-        const res = await fetch(`${BASE}/api/graph`);
+        const res = await fetch(`${BASE}/api/graph?t=${Date.now()}`, {
+            cache: 'no-store'
+        });
         return await res.json();
     } catch (err) {
         return { error: err.message || 'Failed to fetch graph' };

@@ -104,9 +104,9 @@ def _check_relation_patterns(parser, t: str) -> str | None:
             parser.loom.context.update(subject=subj, relation="found_in", obj=locations)
             return f"Got it, {subj} can be found in {locations}."
 
-    # "X lives in Y" / "X live in Y" → lives_in
+    # "X lives in/on Y" / "X live in/on Y" → lives_in
     lives_in_match = _re.match(
-        r"^(.+?)\s+lives?\s+in\s+(.+)$", t
+        r"^(.+?)\s+lives?\s+(?:in|on)\s+(.+)$", t
     )
     if lives_in_match:
         subj = _clean_subject(lives_in_match.group(1))
@@ -132,6 +132,38 @@ def _check_relation_patterns(parser, t: str) -> str | None:
             parser.last_subject = subj
             parser.loom.context.update(subject=subj, relation=relation, obj=obj)
             return f"Got it, {subj} {modal} {obj}."
+
+    # Explicit has/have pattern — catches cases where SVO mis-parses compound subjects
+    # e.g., "Sea turtles has shells" (spaCy treats "turtles" as verb)
+    has_match = _re.match(
+        r"^(.+?)\s+(?:has|have)\s+(.+)$", t, _re.IGNORECASE
+    )
+    if has_match:
+        subj = _clean_subject(has_match.group(1))
+        obj = _clean_object(has_match.group(2))
+        if subj and obj:
+            # Split "X and Y" objects
+            for item in _re.split(r",\s*(?:and\s+)?|\s+and\s+", obj):
+                item = _clean_object(item.strip())
+                if item:
+                    parser.loom.add_fact(subj, "has", item)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation="has", obj=obj)
+            return f"Got it, {subj} has {obj}."
+
+    # Explicit causation pattern — catches cases where SVO mis-parses ambiguous verbs
+    # e.g., "Sharp claws cause better grip" (spaCy treats "claws" as verb)
+    cause_match = _re.match(
+        r"^(.+?)\s+causes?\s+(.+)$", t, _re.IGNORECASE
+    )
+    if cause_match:
+        subj = _clean_subject(cause_match.group(1))
+        obj = _clean_object(cause_match.group(2))
+        if subj and obj:
+            parser.loom.add_fact(subj, "causes", obj)
+            parser.last_subject = subj
+            parser.loom.context.update(subject=subj, relation="causes", obj=obj)
+            return f"Noted — {subj} causes {obj}."
 
     # Try SVO extraction (handles both active and passive voice)
     svos = extract_multiple_svo(t)
@@ -456,6 +488,20 @@ def _check_is_statement(parser, t: str) -> str | None:
     # The main category is the noun(s) - only if there are nouns
     # If only adjectives, we use has_property instead of is
     main_category = " ".join(nouns) if nouns else None
+
+    # Check for "colored X or Y or Z" pattern — extract colors
+    color_match = re.match(r'^colored\s+(.+)$', obj, re.IGNORECASE)
+    if color_match:
+        color_str = color_match.group(1).strip()
+        colors = [c.strip() for c in re.split(r'\s+or\s+|,\s*', color_str) if c.strip()]
+        for s in subjects:
+            if s:
+                parser.loom.add_fact(s, "color", " or ".join(colors))
+                for c in colors:
+                    parser.loom.add_fact(s, "color", c)
+        parser.last_subject = subjects[-1] if subjects else subj
+        parser.loom.context.update(subject=parser.last_subject, relation="color", obj=color_str)
+        return f"Got it, {parser.last_subject} is colored {color_str}."
 
     # Add facts for each subject
     for s in subjects:
