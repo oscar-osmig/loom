@@ -1,15 +1,19 @@
 <script>
-    import { fileStore, selectFile, closeFileList } from '../stores/files.svelte.js';
+    import { fileStore, selectFile, closeFileList, clearAllFiles } from '../stores/files.svelte.js';
 
     function handleClick(name) {
         selectFile(name);
+    }
+
+    function handleDeleteAll() {
+        clearAllFiles();
     }
 </script>
 
 {#if fileStore.items.length > 0}
     <div class="file-sidebar">
         <div class="sidebar-header">
-            <div class="sidebar-title">Files</div>
+            <div class="sidebar-title">Files <button class="delete-all-btn" onclick={handleDeleteAll}>delete all</button></div>
             <button class="close-btn" onclick={closeFileList} title="Close file list">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                     <line x1="18" y1="6" x2="6" y2="18"/>
@@ -66,6 +70,27 @@
         color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .delete-all-btn {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        font-size: 0.625rem;
+        font-family: inherit;
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 0;
+        text-transform: lowercase;
+        letter-spacing: normal;
+        transition: color 0.15s;
+    }
+
+    .delete-all-btn:hover {
+        color: #f87171;
     }
 
     .close-btn {

@@ -72,3 +72,10 @@ export function toggleFileList() {
 export function closeFileList() {
     fileStore.listOpen = false;
 }
+
+export function clearAllFiles() {
+    fileStore.items = [];
+    fileStore.activeFile = null;
+    fileStore.editing = false;
+    persist(fileStore.items);
+}
