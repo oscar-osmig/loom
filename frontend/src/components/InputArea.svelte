@@ -10,6 +10,17 @@
     let textarea = $state(null);
     let sending = $state(false);
 
+    // Autocomplete state
+    const COMMANDS = [
+        'help', 'show', 'stats', 'about', 'style', 'clear',
+        'visualize', 'viz', 'graph', 'activation', 'weights',
+        'clusters', 'procedures',
+        'train', 'load', 'load-all',
+        'forget', 'forget-all',
+    ];
+    let suggestions = $state([]);
+    let selectedIndex = $state(0);
+
     const placeholder = $derived(
         isAuthenticated() ? 'Type a message or /help for commands...' : 'Enter your name...'
     );
@@ -20,11 +31,56 @@
         textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
     }
 
+    function updateSuggestions() {
+        if (!textarea) { suggestions = []; return; }
+        const val = textarea.value;
+        if (val.startsWith('/') && !val.includes(' ')) {
+            const partial = val.slice(1).toLowerCase();
+            suggestions = COMMANDS.filter(c => c.startsWith(partial) && c !== partial);
+            selectedIndex = 0;
+        } else {
+            suggestions = [];
+        }
+    }
+
+    function acceptSuggestion(cmd) {
+        if (!textarea) return;
+        textarea.value = '/' + cmd;
+        suggestions = [];
+        textarea.focus();
+    }
+
     function handleKeydown(e) {
+        if (suggestions.length > 0) {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                acceptSuggestion(suggestions[selectedIndex]);
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedIndex = (selectedIndex + 1) % suggestions.length;
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedIndex = (selectedIndex - 1 + suggestions.length) % suggestions.length;
+                return;
+            }
+            if (e.key === 'Escape') {
+                suggestions = [];
+                return;
+            }
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSend();
         }
+    }
+
+    function handleInput() {
+        autoResize();
+        updateSuggestions();
     }
 
     async function handleSend() {
@@ -51,6 +107,7 @@
 
         const message = text;
         textarea.value = '';
+        suggestions = [];
         autoResize();
 
         const msgLower = message.toLowerCase();
@@ -149,10 +206,22 @@
 
 <div class="input-area">
     <div class="input-wrapper">
+        {#if suggestions.length > 0}
+            <div class="autocomplete">
+                {#each suggestions as cmd, i (cmd)}
+                    <button
+                        class="autocomplete-item"
+                        class:selected={i === selectedIndex}
+                        onmousedown={(e) => { e.preventDefault(); acceptSuggestion(cmd); }}
+                        onmouseenter={() => selectedIndex = i}
+                    >/{cmd}</button>
+                {/each}
+            </div>
+        {/if}
         <textarea
             bind:this={textarea}
             {placeholder}
-            oninput={autoResize}
+            oninput={handleInput}
             onkeydown={handleKeydown}
             rows="1"
             disabled={sending}
@@ -260,5 +329,39 @@
         color: var(--text-muted);
         cursor: not-allowed;
         transform: none;
+    }
+
+    .autocomplete {
+        position: absolute;
+        bottom: 100%;
+        left: 0;
+        right: 0;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-bottom: none;
+        border-radius: 12px 12px 0 0;
+        padding: 0.375rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+        z-index: 10;
+    }
+
+    .autocomplete-item {
+        background: var(--bg-tertiary);
+        border: none;
+        color: var(--text-secondary);
+        font-size: 0.8125rem;
+        font-family: inherit;
+        padding: 0.3rem 0.625rem;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.1s;
+    }
+
+    .autocomplete-item:hover,
+    .autocomplete-item.selected {
+        background: var(--accent);
+        color: white;
     }
 </style>
