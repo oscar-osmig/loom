@@ -333,13 +333,12 @@
 
     .autocomplete {
         position: absolute;
-        bottom: 100%;
+        bottom: calc(100% + 0.375rem);
         left: 0;
         right: 0;
         background: var(--bg-secondary);
         border: 1px solid var(--border);
-        border-bottom: none;
-        border-radius: 12px 12px 0 0;
+        border-radius: 12px;
         padding: 0.375rem;
         display: flex;
         flex-wrap: wrap;
