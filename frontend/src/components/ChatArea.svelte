@@ -1,7 +1,8 @@
 <script>
-    import { chat, clearMessages, formatConversation } from '../stores/chat.svelte.js';
+    import { chat, clearMessages, formatConversation, syncInstance } from '../stores/chat.svelte.js';
     import { isAuthenticated } from '../stores/auth.svelte.js';
     import { ui } from '../stores/ui.svelte.js';
+    import { instance } from '../stores/instance.svelte.js';
     import { fileStore, toggleFileList } from '../stores/files.svelte.js';
     import MessageBubble from './MessageBubble.svelte';
     import WelcomeBox from './WelcomeBox.svelte';
@@ -13,6 +14,7 @@
     import FileViewer from './FileViewer.svelte';
     import FileSidebar from './FileSidebar.svelte';
     import TypingIndicator from './TypingIndicator.svelte';
+    import InstanceSelector from './InstanceSelector.svelte';
 
     let messagesContainer = $state(null);
 
@@ -21,6 +23,12 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
     }
+
+    // Swap chat history when instance changes
+    $effect(() => {
+        instance.current;
+        syncInstance();
+    });
 
     $effect(() => {
         chat.messages.length;
@@ -68,6 +76,12 @@
         {:else if fileStore.activeFile}
             <FileViewer />
         {:else}
+            {#if isAuthenticated()}
+                <div class="instance-badge">
+                    <InstanceSelector />
+                </div>
+            {/if}
+
             <button class="clear-chat-btn" onclick={handleClear} title="Clear chat">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 6 21 6"/>
@@ -132,6 +146,13 @@
         overflow: hidden;
         position: relative;
         min-width: 0;
+    }
+
+    .instance-badge {
+        position: absolute;
+        top: 0.5rem;
+        left: 0.25rem;
+        z-index: 5;
     }
 
     .clear-chat-btn {

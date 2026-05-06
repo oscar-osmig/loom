@@ -73,6 +73,32 @@
         </section>
 
         <section>
+            <h3>Your Tools</h3>
+            <div class="features">
+                <div class="feature">
+                    <b>Like & dislike responses</b>
+                    <span>Every Loom response shows thumbs-up / thumbs-down buttons. Your ratings teach Loom which response styles work best and help improve future answers.</span>
+                </div>
+                <div class="feature">
+                    <b>Edit Loom's answers</b>
+                    <span>Click the pen icon above any response to rewrite it. Your edit is saved and used to improve how Loom communicates — think of it as coaching.</span>
+                </div>
+                <div class="feature">
+                    <b>Instances</b>
+                    <span>The shield icon in the chat lets you switch between Loom instances. <b>General</b> is the shared community brain. Create your own private instances to experiment, study, or build a personal knowledge base — you can have as many as you like.</span>
+                </div>
+                <div class="feature">
+                    <b>Copy conversation</b>
+                    <span>Right-click the chat area (when no text is selected) to copy the entire conversation to your clipboard as clean text.</span>
+                </div>
+                <div class="feature">
+                    <b>File training</b>
+                    <span>Drag-and-drop or use the Train button to upload <code>.txt</code> or <code>.json</code> files. Loom parses them into facts automatically. Uploaded files are viewable in the Files sidebar.</span>
+                </div>
+            </div>
+        </section>
+
+        <section>
             <h3>Community</h3>
             <div class="features">
                 <div class="feature">
@@ -80,8 +106,8 @@
                     <span>See who's contributing the most — ranked by neurons created, corrections made, and messages sent.</span>
                 </div>
                 <div class="feature">
-                    <b>Feedback loop</b>
-                    <span>Rate responses to help Loom learn better ways to communicate.</span>
+                    <b>Style settings</b>
+                    <span>Customize how Loom responds — adjust verbosity, formality, and detail level from the settings menu to match your preference.</span>
                 </div>
             </div>
         </section>
@@ -196,13 +222,13 @@
         font-size: 0.8125rem;
     }
 
-    .examples, .commands {
+    .examples {
         display: flex;
         flex-direction: column;
         gap: 0.375rem;
     }
 
-    .example, .cmd {
+    .example {
         display: flex;
         align-items: center;
         gap: 0.75rem;
@@ -211,7 +237,7 @@
         background: var(--bg-secondary);
     }
 
-    .example code, .cmd code {
+    .example code {
         color: var(--accent-hover);
         font-size: 0.8125rem;
         font-weight: 500;
@@ -219,7 +245,7 @@
         min-width: 140px;
     }
 
-    .example span, .cmd span {
+    .example span {
         color: var(--text-muted);
         font-size: 0.8125rem;
     }

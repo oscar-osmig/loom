@@ -15,9 +15,53 @@ from loom import Loom
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
-# Initialize Loom instance with MongoDB (connection string loaded from MONGO_URI env var)
-loom = Loom(verbose=False, use_mongo=True, database_name="loom_memory")
-loom.context.set_knowledge_ref(loom.knowledge)
+
+# ==================== INSTANCE POOL ====================
+
+class LoomPool:
+    """Manages multiple Loom instances, creating them lazily."""
+
+    def __init__(self, database_name="loom_memory"):
+        self._instances = {}
+        self._database_name = database_name
+
+    def get(self, instance_name="loom"):
+        """Get or create a Loom instance by name."""
+        if instance_name not in self._instances:
+            inst = Loom(
+                name=instance_name,
+                verbose=False,
+                use_mongo=True,
+                database_name=self._database_name,
+            )
+            inst.context.set_knowledge_ref(inst.knowledge)
+            self._instances[instance_name] = inst
+        return self._instances[instance_name]
+
+    def remove(self, instance_name):
+        """Remove a cached instance (e.g. after deletion)."""
+        self._instances.pop(instance_name, None)
+
+
+pool = LoomPool(database_name="loom_memory")
+
+
+def get_loom():
+    """Resolve the Loom instance for the current request.
+
+    Checks (in order): JSON body 'instance', query param 'instance',
+    form field 'instance'. Defaults to 'loom' (General).
+    """
+    instance = None
+    if request.is_json and request.json:
+        instance = request.json.get('instance')
+    if not instance:
+        instance = request.args.get('instance')
+    if not instance:
+        instance = request.form.get('instance')
+    if not instance:
+        instance = 'loom'
+    return pool.get(instance)
 
 
 def is_admin(email: str) -> bool:
@@ -49,12 +93,12 @@ def loom_icon():
     return send_file('loom.png', mimetype='image/png')
 
 
-def forget_user_facts(username: str) -> int:
+def forget_user_facts(loom, username: str) -> int:
     """Remove all facts created by a specific user."""
     return loom.forget_user(username)
 
 
-def _process_training_file(file) -> dict:
+def _process_training_file(file, loom) -> dict:
     """Process a single training file. Returns dict with loaded/errors/filename."""
     filename = file.filename or ''
 
@@ -114,11 +158,12 @@ def upload_training():
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided.'}), 400
 
+    loom = get_loom()
     upload_user = request.form.get('user', '')
     if upload_user:
         loom._session_speaker_id = upload_user
 
-    result = _process_training_file(request.files['file'])
+    result = _process_training_file(request.files['file'], loom)
     if 'error' in result and result['loaded'] == 0:
         return jsonify(result), 400
     return jsonify(result)
@@ -134,6 +179,7 @@ def upload_training_batch():
     if len(files) > 50:
         return jsonify({'error': 'Maximum 50 files per batch.'}), 400
 
+    loom = get_loom()
     upload_user = request.form.get('user', '')
     if upload_user:
         loom._session_speaker_id = upload_user
@@ -143,7 +189,7 @@ def upload_training_batch():
     errors = []
 
     for file in files:
-        result = _process_training_file(file)
+        result = _process_training_file(file, loom)
         total_loaded += result.get('loaded', 0)
         file_results.append({'filename': result['filename'], 'loaded': result.get('loaded', 0)})
         if 'error' in result:
@@ -175,6 +221,8 @@ def chat():
 
     if not message:
         return jsonify({'response': 'Please enter a message.', 'type': 'error'})
+
+    loom = get_loom()
 
     # Switch to this conversation's context (isolates multi-user state)
     if conversation_id:
@@ -226,16 +274,16 @@ def chat():
             return jsonify({'response': '\n'.join(lines), 'type': 'info'})
 
         elif cmd == 'show':
-            return jsonify({'response': get_knowledge_summary(), 'type': 'info'})
+            return jsonify({'response': get_knowledge_summary(loom), 'type': 'info'})
 
         elif cmd == 'activation':
-            return jsonify({'response': get_activation_state(), 'type': 'info'})
+            return jsonify({'response': get_activation_state(loom), 'type': 'info'})
 
         elif cmd == 'weights':
-            return jsonify({'response': get_weights(), 'type': 'info'})
+            return jsonify({'response': get_weights(loom), 'type': 'info'})
 
         elif cmd == 'stats':
-            return jsonify({'response': get_stats(), 'type': 'info'})
+            return jsonify({'response': get_stats(loom), 'type': 'info'})
 
         elif cmd == 'forget-all':
             if not is_admin(email):
@@ -255,7 +303,7 @@ def chat():
 
         elif cmd == 'forget':
             if user:
-                count = forget_user_facts(user)
+                count = forget_user_facts(loom, user)
                 return jsonify({
                     'response': f'Erased {count} of your facts.',
                     'type': 'info',
@@ -300,11 +348,11 @@ def chat():
 
         elif cmd.startswith('analogies '):
             concept = cmd[10:].strip()
-            return jsonify({'response': get_analogies(concept), 'type': 'info'})
+            return jsonify({'response': get_analogies(loom, concept), 'type': 'info'})
 
         elif cmd.startswith('neuron '):
             node = cmd[7:].strip()
-            return jsonify({'response': get_neuron_info(node), 'type': 'info'})
+            return jsonify({'response': get_neuron_info(loom, node), 'type': 'info'})
 
         elif cmd.startswith('frame '):
             concept = cmd[6:].strip()
@@ -412,62 +460,62 @@ Loom is a symbolic, knowledge-graph-based AI system designed to store, reason ab
 Unlike statistical or vector-based AI, Loom relies on explicit symbolic representations (neurons and synapses) and logical reasoning mechanisms to understand and interact with the world.
 
 <b>Core Components</b>
-• <b>Neurons</b> — Concepts or entities (e.g., 'dogs', 'mammals')
-• <b>Synapses</b> — Connections stored as quads: (subject, relation, object, context)
-• <b>Graph</b> — Maps neurons to outgoing synapses
+\u2022 <b>Neurons</b> \u2014 Concepts or entities (e.g., 'dogs', 'mammals')
+\u2022 <b>Synapses</b> \u2014 Connections stored as quads: (subject, relation, object, context)
+\u2022 <b>Graph</b> \u2014 Maps neurons to outgoing synapses
 
 <b>Key Features</b>
-• Fully explainable chains of inference
-• Curiosity-driven discovery of new knowledge
-• Context-aware dialogue understanding
-• Hebbian learning (connections strengthen with use)
-• Spreading activation for related concept discovery
-• Property inheritance through category hierarchies
-• Temporal awareness for time-sensitive facts"""
+\u2022 Fully explainable chains of inference
+\u2022 Curiosity-driven discovery of new knowledge
+\u2022 Context-aware dialogue understanding
+\u2022 Hebbian learning (connections strengthen with use)
+\u2022 Spreading activation for related concept discovery
+\u2022 Property inheritance through category hierarchies
+\u2022 Temporal awareness for time-sensitive facts"""
 
 
 def get_help_text(admin=False):
     """Return help text, filtering commands by role."""
-    text = """<b>Loom — Community Knowledge System</b>
+    text = """<b>Loom \u2014 Community Knowledge System</b>
 A knowledge system built from what people teach it. Every fact is transparent, attributed, and open to revision.
 
 <b>Contribute</b>
-• "dogs are mammals" — teach a fact
-• "no, that's wrong" — correct a mistake
-• "actually, cats are felines" — update knowledge
-• Paste paragraphs — Loom extracts knowledge automatically
+\u2022 "dogs are mammals" \u2014 teach a fact
+\u2022 "no, that's wrong" \u2014 correct a mistake
+\u2022 "actually, cats are felines" \u2014 update knowledge
+\u2022 Paste paragraphs \u2014 Loom extracts knowledge automatically
 
 <b>Ask</b>
-• "what are dogs?" — query categories
-• "tell me about elephants" — full description
-• "where do fish live?" — locations
-• "can birds fly?" — abilities
+\u2022 "what are dogs?" \u2014 query categories
+\u2022 "tell me about elephants" \u2014 full description
+\u2022 "where do fish live?" \u2014 locations
+\u2022 "can birds fly?" \u2014 abilities
 
 <b>Commands</b> (use / prefix)
-• /about — what is Loom + how to contribute
-• /help — this help
-• /visualize — explore the knowledge graph
-• /clear — clear chat history
-• /forget — erase your own facts"""
+\u2022 /about \u2014 what is Loom + how to contribute
+\u2022 /help \u2014 this help
+\u2022 /visualize \u2014 explore the knowledge graph
+\u2022 /clear \u2014 clear chat history
+\u2022 /forget \u2014 erase your own facts"""
 
     if admin:
         text += """
 
 <b>Admin</b>
-• /show — knowledge summary
-• /stats — storage statistics
-• /style — writing style analytics
-• /load-all — load all training files
-• /neuron X — inspect concept
-• /frame X — concept frame
-• /clusters — emergent clusters
-• /analogies X — find similar concepts
-• /forget-all — erase all memory"""
+\u2022 /show \u2014 knowledge summary
+\u2022 /stats \u2014 storage statistics
+\u2022 /style \u2014 writing style analytics
+\u2022 /load-all \u2014 load all training files
+\u2022 /neuron X \u2014 inspect concept
+\u2022 /frame X \u2014 concept frame
+\u2022 /clusters \u2014 emergent clusters
+\u2022 /analogies X \u2014 find similar concepts
+\u2022 /forget-all \u2014 erase all memory"""
 
     return text
 
 
-def get_knowledge_summary():
+def get_knowledge_summary(loom):
     """Get a summary of current knowledge."""
     knowledge = loom.knowledge
     if not knowledge:
@@ -476,13 +524,13 @@ def get_knowledge_summary():
     lines = ["<b>Knowledge Graph</b>", ""]
     for node, relations in knowledge.items():
         rel_count = sum(len(v) for v in relations.values())
-        lines.append(f"• <b>{node}</b>: {rel_count} connections")
+        lines.append(f"\u2022 <b>{node}</b>: {rel_count} connections")
 
     lines.append(f"\nTotal: {len(knowledge)} neurons")
     return "\n".join(lines)
 
 
-def get_activation_state():
+def get_activation_state(loom):
     """Get current activation state."""
     state = loom.activation.get_state()
     lines = ["<b>Activation State</b>", ""]
@@ -491,7 +539,7 @@ def get_activation_state():
         lines.append(f"Primed nodes: {len(state['primed'])}")
         for node in state['primed'][:5]:
             level = loom.activation.get_activation(node)
-            lines.append(f"  • {node}: {level:.2f}")
+            lines.append(f"  \u2022 {node}: {level:.2f}")
     else:
         lines.append("No primed nodes.")
 
@@ -499,12 +547,12 @@ def get_activation_state():
     if state['top_activated']:
         lines.append("Top activated:")
         for node, level in state['top_activated']:
-            lines.append(f"  • {node}: {level:.2f}")
+            lines.append(f"  \u2022 {node}: {level:.2f}")
 
     return "\n".join(lines)
 
 
-def get_weights():
+def get_weights(loom):
     """Get strong connection weights."""
     strong = loom.get_strong_connections(threshold=1.2)
 
@@ -513,12 +561,12 @@ def get_weights():
 
     lines = ["<b>Strong Connections (Hebbian)</b>", ""]
     for subj, rel, obj, weight in strong[:10]:
-        lines.append(f"• {subj} —[{rel}]→ {obj}: <b>{weight:.2f}</b>")
+        lines.append(f"\u2022 {subj} \u2014[{rel}]\u2192 {obj}: <b>{weight:.2f}</b>")
 
     return "\n".join(lines)
 
 
-def get_stats():
+def get_stats(loom):
     """Get storage statistics."""
     stats = loom.get_stats()
     return f"""<b>Storage Statistics</b>
@@ -531,7 +579,7 @@ Inferences: {stats['inferences']}
 Conflicts: {stats['conflicts']}"""
 
 
-def get_analogies(concept):
+def get_analogies(loom, concept):
     """Find analogies for a concept."""
     analogies = loom.inference.find_analogies(concept)
 
@@ -540,12 +588,12 @@ def get_analogies(concept):
 
     lines = [f"<b>Analogies for '{concept}'</b>", ""]
     for analog, sim in analogies:
-        lines.append(f"• {analog}: {sim:.0%} similar")
+        lines.append(f"\u2022 {analog}: {sim:.0%} similar")
 
     return "\n".join(lines)
 
 
-def get_neuron_info(node):
+def get_neuron_info(loom, node):
     """Get information about a specific neuron, including provenance and correction history."""
     from loom.normalizer import normalize
     node_norm = normalize(node)
@@ -576,8 +624,8 @@ def get_neuron_info(node):
                 if corrected_by:
                     prov_parts.append(f"corrected by {corrected_by}")
 
-            prov_str = f" — {', '.join(prov_parts)}" if prov_parts else ""
-            lines.append(f"• —[{rel}]→ {target}{weight_str}{prov_str}")
+            prov_str = f" \u2014 {', '.join(prov_parts)}" if prov_parts else ""
+            lines.append(f"\u2022 \u2014[{rel}]\u2192 {target}{weight_str}{prov_str}")
 
     # Append correction summary if any corrections exist for this concept
     try:
@@ -598,16 +646,7 @@ def get_neuron_info(node):
 
 @app.route('/api/speech', methods=['POST'])
 def process_speech():
-    """
-    Process speech input (text with speech metadata).
-
-    Expected JSON:
-    {
-        "text": "The transcribed text",
-        "speaker_id": "optional_speaker_id",
-        "confidence": 0.95  // ASR confidence 0.0-1.0
-    }
-    """
+    """Process speech input (text with speech metadata)."""
     data = request.json
     text = data.get('text', '').strip()
     speaker_id = data.get('speaker_id')
@@ -616,6 +655,7 @@ def process_speech():
     if not text:
         return jsonify({'error': 'No text provided', 'type': 'error'}), 400
 
+    loom = get_loom()
     try:
         response = loom.process_speech(text, speaker_id=speaker_id, confidence=confidence)
         return jsonify({
@@ -633,12 +673,7 @@ def process_speech():
 
 @app.route('/api/speech/audio', methods=['POST'])
 def process_audio():
-    """
-    Process an audio file directly.
-
-    Expects multipart form data with 'audio' file.
-    Optional: 'backend' parameter (whisper_local, whisper_api, vosk, mock)
-    """
+    """Process an audio file directly."""
     if 'audio' not in request.files:
         return jsonify({'error': 'No audio file provided', 'type': 'error'}), 400
 
@@ -651,6 +686,7 @@ def process_audio():
         audio_file.save(tmp.name)
         tmp_path = tmp.name
 
+    loom = get_loom()
     try:
         result = loom.process_audio(tmp_path, backend=backend)
         return jsonify({
@@ -674,6 +710,7 @@ def check_nickname():
     if not name:
         return jsonify({'available': False, 'reason': 'Empty name'})
 
+    loom = get_loom()
     try:
         existing = loom.storage.db.facts.distinct(
             'properties.speaker_id',
@@ -690,6 +727,7 @@ def check_nickname():
 @app.route('/api/collaborators', methods=['GET'])
 def get_collaborators():
     """Aggregate user contributions: neurons created, corrections, messages."""
+    loom = get_loom()
     inst = loom.storage.instance_name
 
     try:
@@ -718,14 +756,12 @@ def get_collaborators():
 
         # Admin detection
         admin_email = os.environ.get('ADMIN_EMAIL', '').lower()
-        # Also collect admin names from user_stats where we can store email
         admin_names = set()
         if admin_email:
             admin_names.add(admin_email)
             admin_names.add(admin_email.split('@')[0])
             admin_names.add(admin_email.split('@')[0].replace('.', ' '))
             admin_names.add(admin_email.split('@')[0].replace('.', ''))
-        # Caller can pass their email to tag themselves
         caller_email = request.args.get('email', '').lower()
         caller_user = request.args.get('user', '')
         if caller_email and is_admin(caller_email) and caller_user:
@@ -733,11 +769,10 @@ def get_collaborators():
 
         # Merge all users (filter out None/empty)
         all_users = set(neurons_by_user.keys()) | set(corrections_by_user.keys()) | set(messages_by_user.keys())
-        all_users = {u for u in all_users if u}  # remove None and ""
+        all_users = {u for u in all_users if u}
 
         collaborators = []
         for u in all_users:
-            # Check admin
             user_is_admin = u.lower() in admin_names if admin_names else False
             collaborators.append({
                 "user": u,
@@ -747,7 +782,6 @@ def get_collaborators():
                 "is_admin": user_is_admin,
             })
 
-        # Sorted lists
         by_neurons = sorted(collaborators, key=lambda x: x["neurons"], reverse=True)
         by_corrections = sorted(collaborators, key=lambda x: x["corrections"], reverse=True)
         by_messages = sorted(collaborators, key=lambda x: x["messages"], reverse=True)
@@ -768,12 +802,13 @@ def get_style():
     email = request.args.get('email', '')
     if not is_admin(email):
         return jsonify({'error': 'Admin access required'}), 403
+
+    loom = get_loom()
     if not hasattr(loom, 'style_learner'):
         return jsonify({'stats': {}, 'patterns': []})
 
     stats = loom.style_learner.get_stats()
 
-    # Top patterns per kind
     patterns = {
         'openers': [
             {'value': v, 'score': s, 'likes': doc.get('likes', 0), 'dislikes': doc.get('dislikes', 0), 'count': doc.get('count', 0)}
@@ -809,6 +844,7 @@ def record_response_edit():
     if edited == original:
         return jsonify({'ok': True, 'changed': False})
 
+    loom = get_loom()
     doc = {
         'instance': loom.storage.instance_name,
         'message_id': data.get('message_id'),
@@ -820,7 +856,6 @@ def record_response_edit():
     }
     try:
         loom.storage.db.response_edits.insert_one(doc)
-        # Also record as negative feedback for the original style
         if hasattr(loom, 'style_learner'):
             loom.style_learner.record(
                 input_text=doc['input_text'],
@@ -841,6 +876,7 @@ def record_feedback():
     if rating not in ('like', 'dislike'):
         return jsonify({'error': 'Invalid rating'}), 400
 
+    loom = get_loom()
     doc = {
         'instance': loom.storage.instance_name,
         'message_id': data.get('message_id'),
@@ -852,7 +888,6 @@ def record_feedback():
     }
     try:
         loom.storage.db.feedback.insert_one(doc)
-        # Feed into style learner if available
         if hasattr(loom, 'style_learner'):
             loom.style_learner.record(
                 input_text=doc['input_text'],
@@ -867,6 +902,7 @@ def record_feedback():
 @app.route('/api/questions', methods=['GET'])
 def get_questions():
     """Get curiosity engine questions."""
+    loom = get_loom()
     loom.run_curiosity_cycle()
     questions = loom.get_questions(5)
     return jsonify({
@@ -879,6 +915,7 @@ def get_questions():
 @app.route('/api/graph', methods=['GET'])
 def get_graph():
     """Get knowledge graph data for visualization."""
+    loom = get_loom()
     knowledge = loom.knowledge
 
     nodes = []
@@ -1071,14 +1108,11 @@ def get_graph():
 
 @app.route('/api/corrections/<concept>', methods=['GET'])
 def get_corrections(concept):
-    """
-    Get all corrections related to a concept.
-
-    Returns JSON array of correction events from the corrections collection
-    and from fact properties that contain correction_history.
-    """
+    """Get all corrections related to a concept."""
     from loom.normalizer import normalize
     concept_norm = normalize(concept)
+
+    loom = get_loom()
     inst = loom.storage.instance_name
 
     corrections = []
@@ -1141,7 +1175,135 @@ def get_corrections(concept):
     })
 
 
+# ==================== INSTANCE MANAGEMENT ====================
+
+@app.route('/api/instances', methods=['GET'])
+def list_instances():
+    """List instances accessible to the current user.
+
+    Always includes 'loom' (General). Also returns any personal instances
+    owned by the caller's email.
+    """
+    email = request.args.get('email', '').strip()
+
+    # General is always present
+    instances = [{'instance_name': 'loom', 'display_name': 'General', 'is_personal': False}]
+
+    if email:
+        try:
+            db = pool.get('loom').storage.db
+            cursor = db.loom_instances.find(
+                {'owner_email': email},
+                {'_id': 0}
+            ).sort('created_at', 1)
+            for doc in cursor:
+                instances.append({
+                    'instance_name': doc['instance_name'],
+                    'display_name': doc.get('display_name', 'Personal'),
+                    'is_personal': True,
+                })
+        except Exception:
+            pass
+
+    return jsonify({'instances': instances})
+
+
+@app.route('/api/instances', methods=['POST'])
+def create_instance():
+    """Create a personal Loom instance for the authenticated user.
+
+    Expected JSON: { "email": "...", "display_name": "..." }
+    Instance name is derived as "user:<email>:<slug>".
+    Users can create multiple instances.
+    """
+    data = request.json or {}
+    email = (data.get('email') or '').strip()
+    display_name = (data.get('display_name') or 'Personal').strip()
+
+    if not email:
+        return jsonify({'error': 'Email required.'}), 400
+
+    import re
+    slug = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')
+    if not slug:
+        slug = 'personal'
+    instance_name = f'user:{email}:{slug}'
+
+    try:
+        db = pool.get('loom').storage.db
+
+        # Ensure unique index exists
+        db.loom_instances.create_index('instance_name', unique=True)
+
+        # Check if this exact instance already exists
+        existing = db.loom_instances.find_one({'instance_name': instance_name})
+        if existing:
+            return jsonify({'error': 'An instance with that name already exists.'}), 409
+
+        from datetime import datetime, timezone
+        db.loom_instances.insert_one({
+            'instance_name': instance_name,
+            'owner_email': email,
+            'display_name': display_name,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        })
+
+        # Eagerly create the Loom instance so system neurons are initialized
+        pool.get(instance_name)
+
+        return jsonify({
+            'instance_name': instance_name,
+            'display_name': display_name,
+            'is_personal': True,
+        }), 201
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/instances', methods=['DELETE'])
+def delete_instance():
+    """Delete a personal Loom instance.
+
+    Expected JSON: { "email": "...", "instance_name": "..." }
+    Only the owner can delete their instance. Cannot delete General.
+    """
+    data = request.json or {}
+    email = (data.get('email') or '').strip()
+    instance_name = (data.get('instance_name') or '').strip()
+
+    if not email or not instance_name:
+        return jsonify({'error': 'Email and instance_name required.'}), 400
+
+    if instance_name == 'loom':
+        return jsonify({'error': 'Cannot delete General instance.'}), 403
+
+    try:
+        db = pool.get('loom').storage.db
+
+        # Verify ownership
+        doc = db.loom_instances.find_one({'instance_name': instance_name, 'owner_email': email})
+        if not doc:
+            return jsonify({'error': 'Instance not found or not owned by you.'}), 404
+
+        # Wipe all data for this instance
+        instance_loom = pool.get(instance_name)
+        instance_loom.forget_all()
+
+        # Remove metadata
+        db.loom_instances.delete_one({'instance_name': instance_name})
+
+        # Evict from pool
+        pool.remove(instance_name)
+
+        return jsonify({'ok': True})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
+    loom = pool.get('loom')
     print("\n  Loom Web Interface")
     print(f"  Storage: MongoDB")
     stats = loom.get_stats()

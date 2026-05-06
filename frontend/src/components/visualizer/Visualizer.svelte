@@ -1,5 +1,6 @@
 <script>
     import { ui, setVizOpen } from '../../stores/ui.svelte.js';
+    import { instance } from '../../stores/instance.svelte.js';
     import { GraphEngine } from './engine/graph-engine.js';
     import { render } from './engine/graph-renderer.js';
     import { attachInteractions } from './engine/graph-interaction.js';
@@ -364,7 +365,7 @@
         <div class="viz-header">
             <div class="viz-title">
                 <span class="viz-title-dot"></span>
-                Neural Map
+                Neural Map <span class="viz-instance-label">({instance.currentName})</span>
             </div>
             <div class="viz-search-wrapper">
                 <div class="viz-search-icon">
@@ -566,6 +567,9 @@
     .viz-title-dot {
         width: 8px; height: 8px; background: #64c8ff; border-radius: 50%;
         box-shadow: 0 0 8px rgba(100,200,255,0.6);
+    }
+    .viz-instance-label {
+        font-weight: 400; font-size: 0.8125rem; opacity: 0.6;
     }
 
     .viz-close {

@@ -1,12 +1,13 @@
 /**
- * Chat store — reactive message list with sessionStorage persistence (Svelte 5 runes).
+ * Chat store — reactive message list with per-instance sessionStorage persistence (Svelte 5 runes).
  */
 
-const STORAGE_KEY = 'loom_chat_history';
-const CONV_ID_KEY = 'loom_conversation_id';
+import { instance } from './instance.svelte.js';
+
+const STORAGE_PREFIX = 'loom_chat_';
+const CONV_PREFIX = 'loom_conv_';
 
 function generateUUID() {
-    // Browser-native UUID when available, fallback otherwise
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
         return crypto.randomUUID();
     }
@@ -17,12 +18,21 @@ function generateUUID() {
     });
 }
 
-function loadConversationId() {
+function storageKey(inst) {
+    return STORAGE_PREFIX + (inst || 'loom');
+}
+
+function convKey(inst) {
+    return CONV_PREFIX + (inst || 'loom');
+}
+
+function loadConversationId(inst) {
     try {
-        let id = sessionStorage.getItem(CONV_ID_KEY);
+        const key = convKey(inst);
+        let id = sessionStorage.getItem(key);
         if (!id) {
             id = generateUUID();
-            sessionStorage.setItem(CONV_ID_KEY, id);
+            sessionStorage.setItem(key, id);
         }
         return id;
     } catch {
@@ -30,17 +40,9 @@ function loadConversationId() {
     }
 }
 
-export const conversationId = loadConversationId();
-
-export function resetConversation() {
-    const newId = generateUUID();
-    try { sessionStorage.setItem(CONV_ID_KEY, newId); } catch {}
-    return newId;
-}
-
-function loadMessages() {
+function loadMessages(inst) {
     try {
-        const raw = sessionStorage.getItem(STORAGE_KEY);
+        const raw = sessionStorage.getItem(storageKey(inst));
         if (raw) {
             const msgs = JSON.parse(raw);
             if (Array.isArray(msgs)) return msgs;
@@ -51,17 +53,47 @@ function loadMessages() {
 
 function persistMessages() {
     try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(chat.messages));
+        sessionStorage.setItem(storageKey(instance.current), JSON.stringify(chat.messages));
     } catch {}
 }
 
-const loaded = loadMessages();
+const initialInstance = instance.current;
+const loaded = loadMessages(initialInstance);
 let nextId = loaded.length > 0 ? Math.max(...loaded.map(m => m.id || 0)) + 1 : 1;
+
+export let conversationId = loadConversationId(initialInstance);
+
+export function resetConversation() {
+    const newId = generateUUID();
+    try { sessionStorage.setItem(convKey(instance.current), newId); } catch {}
+    conversationId = newId;
+    return newId;
+}
 
 export const chat = $state({
     messages: loaded,
     isTyping: false,
 });
+
+// Watch for instance changes and swap chat history
+let prevInstance = initialInstance;
+
+export function syncInstance() {
+    const cur = instance.current;
+    if (cur === prevInstance) return;
+    // Save current messages for the old instance
+    try {
+        sessionStorage.setItem(storageKey(prevInstance), JSON.stringify(chat.messages));
+    } catch {}
+    // Load messages for the new instance
+    const msgs = loadMessages(cur);
+    chat.messages.length = 0;
+    for (const m of msgs) chat.messages.push(m);
+    nextId = msgs.length > 0 ? Math.max(...msgs.map(m => m.id || 0)) + 1 : 1;
+    chat.isTyping = false;
+    conversationId = loadConversationId(cur);
+    prevInstance = cur;
+}
 
 export function addMessage(content, type, meta) {
     chat.messages.push({
@@ -96,7 +128,7 @@ export function markFeedback(id, rating) {
 export function clearMessages() {
     chat.messages.length = 0;
     nextId = 1;
-    try { sessionStorage.removeItem(STORAGE_KEY); } catch {}
+    try { sessionStorage.removeItem(storageKey(instance.current)); } catch {}
 }
 
 /**
@@ -108,7 +140,6 @@ export function formatConversation() {
     const lines = [];
     for (const msg of chat.messages) {
         const prefix = msg.type === 'user' ? 'You' : 'Loom';
-        // Strip HTML tags for clean text
         const text = (msg.content || '')
             .replace(/<br\s*\/?>/gi, '\n')
             .replace(/<[^>]+>/g, '')
