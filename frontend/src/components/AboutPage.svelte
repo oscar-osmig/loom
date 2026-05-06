@@ -21,27 +21,27 @@
     <div class="about-body">
         <section>
             <h3>What is Loom?</h3>
-            <p>Loom is a community-built symbolic knowledge system that learns from what people teach it through natural conversation.</p>
+            <p>Loom is a community-built symbolic knowledge system. It learns from what people teach it through natural conversation — structured reasoning over facts you can see and revise.</p>
         </section>
 
         <section>
             <h3>What Makes It Different</h3>
             <div class="features">
                 <div class="feature">
-                    <b>Built from contributions</b>
-                    <span>Loom starts with minimal built-in knowledge and grows as people add and refine facts.</span>
+                    <b>Pure symbolic reasoning</b>
+                    <span>Every fact is a transparent triple (e.g., <code>dog → is → mammal</code>). No black-box models or hidden weights.</span>
                 </div>
                 <div class="feature">
-                    <b>Explicit relationships</b>
-                    <span>No opaque embeddings. Every idea is stored as a named connection (e.g., <code>dog → is → mammal</code>).</span>
+                    <b>Community-driven knowledge</b>
+                    <span>Loom starts nearly empty and grows as people teach, correct, and refine facts together.</span>
                 </div>
                 <div class="feature">
-                    <b>Attribution built-in</b>
-                    <span>Facts, edits, and corrections are tied to the people who contributed them.</span>
+                    <b>Full attribution</b>
+                    <span>Every fact, correction, and edit is tied to the person who contributed it.</span>
                 </div>
                 <div class="feature">
-                    <b>Consensus over time</b>
-                    <span>As more people confirm or challenge a fact, its reliability becomes clearer.</span>
+                    <b>Open to revision</b>
+                    <span>Anyone can correct mistakes. Corrections are tracked and visible, building consensus over time.</span>
                 </div>
             </div>
         </section>
@@ -51,64 +51,52 @@
             <div class="features">
                 <div class="feature">
                     <b>Knowledge graph</b>
-                    <span>Knowledge is stored as a graph of concepts and relationships.</span>
+                    <span>Facts are stored as neurons (concepts) connected by synapses (relationships) — visualize them live.</span>
                 </div>
                 <div class="feature">
-                    <b>Natural language parser</b>
-                    <span>A parser turns natural language into structured facts.</span>
+                    <b>Natural language understanding</b>
+                    <span>Loom parses your sentences into structured facts, handles paragraphs, lists, corrections, and questions.</span>
+                </div>
+                <div class="feature">
+                    <b>Inference engine</b>
+                    <span>Derives new facts through transitive chains, property inheritance, and analogy detection.</span>
                 </div>
                 <div class="feature">
                     <b>Spreading activation</b>
-                    <span>Surfaces related concepts during conversation.</span>
+                    <span>Related concepts light up during conversation, surfacing connections you might not expect.</span>
                 </div>
                 <div class="feature">
-                    <b>Hebbian strengthening</b>
-                    <span>Repeated co-occurrence strengthens connections over time.</span>
-                </div>
-                <div class="feature">
-                    <b>Inference</b>
-                    <span>Derives new facts — transitive relationships, inherited properties, analogies.</span>
-                </div>
-                <div class="feature">
-                    <b>Response composer</b>
-                    <span>Combines relevant facts into natural language answers.</span>
+                    <b>Hebbian learning</b>
+                    <span>Connections that fire together strengthen over time — unused ones gradually fade.</span>
                 </div>
             </div>
         </section>
 
         <section>
-            <h3>Community Layer</h3>
+            <h3>Community</h3>
             <div class="features">
                 <div class="feature">
-                    <b>Corrections</b>
-                    <span>Visible and attributed — click the people icon to see who's contributing.</span>
+                    <b>Collaborator leaderboard</b>
+                    <span>See who's contributing the most — ranked by neurons created, corrections made, and messages sent.</span>
                 </div>
                 <div class="feature">
-                    <b>Contributors</b>
-                    <span>Ranked by activity and impact — facts taught, corrections made, messages sent.</span>
-                </div>
-                <div class="feature">
-                    <b>Feedback</b>
-                    <span>Rate responses with 👍/👎 to shape how Loom communicates over time.</span>
+                    <b>Feedback loop</b>
+                    <span>Rate responses to help Loom learn better ways to communicate.</span>
                 </div>
             </div>
         </section>
 
         <section>
-            <h3>The Idea</h3>
-            <p>A knowledge system you can talk to, where every fact is transparent, attributed, and open to revision — closer to a conversational Wikipedia than a black-box model.</p>
-        </section>
-
-        <section>
-            <h3>Ways to Contribute</h3>
+            <h3>Getting Started</h3>
             <div class="examples">
                 <div class="example"><code>dogs are mammals</code><span>teach a fact</span></div>
-                <div class="example"><code>no, that's wrong</code><span>correct a mistake</span></div>
-                <div class="example"><code>tell me about cats</code><span>test Loom's knowledge</span></div>
-                <div class="example"><code>/visualize</code><span>explore the knowledge graph</span></div>
+                <div class="example"><code>cats have whiskers</code><span>add a property</span></div>
+                <div class="example"><code>actually, X is Y</code><span>correct a mistake</span></div>
+                <div class="example"><code>what are dogs?</code><span>ask a question</span></div>
+                <div class="example"><code>/visualize</code><span>explore the graph</span></div>
                 <div class="example"><code>/help</code><span>see all commands</span></div>
             </div>
-            <p class="hint">You can also paste paragraphs, drag and drop training files, or upload files via the Train button.</p>
+            <p class="hint">Type <code>/</code> to see command autocomplete. You can also paste paragraphs, drag and drop training files, or upload via the Train button.</p>
         </section>
 
     </div>

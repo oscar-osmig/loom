@@ -85,7 +85,7 @@
 
 <header class="header">
     <div class="header-left">
-        <div class="logo">
+        <button class="logo" onclick={handleAbout} title="About Loom">
             <div class="logo-icon">
                 <img src="/loom.png" alt="Loom" width="40" height="40" />
             </div>
@@ -93,7 +93,7 @@
                 <h1>Loom</h1>
                 <p>Knowledge Weaver</p>
             </div>
-        </div>
+        </button>
     </div>
 
     <div class="header-actions" class:locked={ui.headerLocked}>
@@ -199,6 +199,16 @@
         display: flex;
         align-items: center;
         gap: 0.75rem;
+        background: none;
+        border: none;
+        color: inherit;
+        cursor: pointer;
+        padding: 0;
+        text-align: left;
+    }
+
+    .logo:hover .logo-icon {
+        opacity: 0.8;
     }
 
     .logo-icon {
