@@ -138,28 +138,37 @@ class MongoStorage:
         # Secondary collections queried/aggregated by instance (and by user or
         # subject). Without these, every leaderboard / correction / conversation
         # / style lookup is a full collection scan.
-        self.db.corrections.create_index(
-            [("instance", ASCENDING), ("subject", ASCENDING)],
-            name="idx_corrections_subject")
-        self.db.corrections.create_index(
-            [("instance", ASCENDING), ("corrected_by", ASCENDING)],
-            name="idx_corrections_user")
-        self.db.user_stats.create_index(
-            [("instance", ASCENDING), ("user", ASCENDING)],
-            unique=True, name="idx_user_stats")
-        self.db.feedback.create_index(
-            [("instance", ASCENDING)], name="idx_feedback_instance")
-        self.db.response_edits.create_index(
-            [("instance", ASCENDING)], name="idx_response_edits_instance")
-        self.db.conversations.create_index(
-            [("instance", ASCENDING), ("conversation_id", ASCENDING)],
-            name="idx_conversations")
-        self.db.style_patterns.create_index(
-            [("instance", ASCENDING)], name="idx_style_patterns_instance")
-        self.db.loom_instances.create_index(
-            "instance_name", unique=True, name="idx_loom_instance_name")
-        self.db.loom_instances.create_index(
-            "owner_email", name="idx_loom_instance_owner")
+        #
+        # These run best-effort: on an existing database an equivalent index may
+        # already exist under a different name (e.g. loom_instances already has
+        # an auto-named "instance_name_1" from create_instance), or a unique
+        # index may clash with pre-existing duplicate rows. A conflict there must
+        # not crash storage init — that would 500 every request. Log and move on.
+        secondary_indexes = [
+            (self.db.corrections, [("instance", ASCENDING), ("subject", ASCENDING)],
+             {"name": "idx_corrections_subject"}),
+            (self.db.corrections, [("instance", ASCENDING), ("corrected_by", ASCENDING)],
+             {"name": "idx_corrections_user"}),
+            (self.db.user_stats, [("instance", ASCENDING), ("user", ASCENDING)],
+             {"name": "idx_user_stats", "unique": True}),
+            (self.db.feedback, [("instance", ASCENDING)],
+             {"name": "idx_feedback_instance"}),
+            (self.db.response_edits, [("instance", ASCENDING)],
+             {"name": "idx_response_edits_instance"}),
+            (self.db.conversations, [("instance", ASCENDING), ("conversation_id", ASCENDING)],
+             {"name": "idx_conversations"}),
+            (self.db.style_patterns, [("instance", ASCENDING)],
+             {"name": "idx_style_patterns_instance"}),
+            (self.db.loom_instances, [("instance_name", ASCENDING)],
+             {"name": "idx_loom_instance_name", "unique": True}),
+            (self.db.loom_instances, [("owner_email", ASCENDING)],
+             {"name": "idx_loom_instance_owner"}),
+        ]
+        for collection, keys, opts in secondary_indexes:
+            try:
+                collection.create_index(keys, **opts)
+            except Exception as e:
+                logger.warning("Skipping index %s: %s", opts.get("name"), e)
 
     # ==================== FACTS ====================
 

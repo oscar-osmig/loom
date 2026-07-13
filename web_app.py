@@ -1323,9 +1323,9 @@ def create_instance():
 
     try:
         db = pool.get('loom').storage.db
-
-        # Ensure unique index exists
-        db.loom_instances.create_index('instance_name', unique=True)
+        # The unique index on instance_name is created at storage init
+        # (_ensure_indexes); re-creating it here with a different auto-name would
+        # conflict on an existing database.
 
         # Check if this exact instance already exists
         existing = db.loom_instances.find_one({'instance_name': instance_name})
