@@ -261,6 +261,34 @@ def forget_user_facts(loom, username: str) -> int:
     return loom.forget_user(username)
 
 
+def _train_triples(loom, triples):
+    """Bulk-train a list of (subject, relation, object) triples.
+
+    Uses add_facts_batch — one bulk insert, one cache rebuild, inference
+    deferred to the background daemon — instead of per-fact add_fact, which
+    costs several storage round-trips per fact (very slow against a remote
+    MongoDB like Atlas). Returns (loaded_count, extra_message).
+    """
+    if not triples:
+        return 0, ''
+    try:
+        result = loom.add_facts_batch(triples)
+    except ImportError:
+        # pandas unavailable — fall back to the per-fact path
+        count = 0
+        for s, r, o in triples:
+            loom.add_fact(s, r, o)
+            count += 1
+        return count, ''
+    parts = []
+    if result.get('duplicates'):
+        parts.append(f"{result['duplicates']} duplicates skipped")
+    if result.get('invalid'):
+        parts.append(f"{result['invalid']} invalid entries rejected")
+    extra = f" ({', '.join(parts)})" if parts else ''
+    return result.get('inserted', 0), extra
+
+
 def _process_training_file(file, loom) -> dict:
     """Process a single training file. Returns dict with loaded/errors/filename."""
     filename = file.filename or ''
@@ -276,8 +304,8 @@ def _process_training_file(file, loom) -> dict:
     if not content.strip():
         return {'error': f'{filename}: empty.', 'loaded': 0, 'filename': filename}
 
-    count = 0
     errors = []
+    triples = []
 
     if filename.lower().endswith('.json'):
         try:
@@ -297,8 +325,7 @@ def _process_training_file(file, loom) -> dict:
             obj = item.get('object', item.get('o', ''))
             if not subj or not rel or not obj:
                 continue
-            loom.add_fact(subj, rel, obj)
-            count += 1
+            triples.append((subj, rel, obj))
     else:
         for i, line in enumerate(content.strip().split('\n')):
             line = line.strip()
@@ -306,8 +333,9 @@ def _process_training_file(file, loom) -> dict:
                 continue
             parts = [p.strip() for p in (line.split('|') if '|' in line else line.split(','))]
             if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
-                loom.add_fact(parts[0], parts[1], parts[2])
-                count += 1
+                triples.append((parts[0], parts[1], parts[2]))
+
+    count, _ = _train_triples(loom, triples)
 
     result = {'loaded': count, 'filename': filename}
     if errors:
@@ -574,16 +602,16 @@ def chat():
                 import json
                 data = json.loads(stripped)
                 if isinstance(data, list) and data and isinstance(data[0], dict):
-                    count = 0
+                    triples = []
                     for item in data:
                         subj = item.get('subject', item.get('s', ''))
                         rel = item.get('relation', item.get('r', ''))
                         obj = item.get('object', item.get('o', ''))
                         if subj and rel and obj:
-                            loom.add_fact(subj, rel, obj)
-                            count += 1
+                            triples.append((subj, rel, obj))
+                    count, extra = _train_triples(loom, triples)
                     return jsonify({
-                        'response': f'Loaded {count} facts from pasted JSON.',
+                        'response': f'Loaded {count} facts from pasted JSON.{extra}',
                         'type': 'info'
                     })
             except (json.JSONDecodeError, ValueError):
