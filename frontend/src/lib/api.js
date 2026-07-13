@@ -7,7 +7,7 @@ import { instance } from '../stores/instance.svelte.js';
 const BASE = '';  // same origin; change to 'http://localhost:5000' during dev if needed
 
 const DEFAULT_TIMEOUT_MS = 30000;   // 30s for regular requests
-const UPLOAD_TIMEOUT_MS = 120000;   // 2min for training uploads
+const UPLOAD_TIMEOUT_MS = 300000;   // 5min for training uploads (large imports)
 
 /** Current instance name for threading through requests. */
 function inst() { return instance.current; }

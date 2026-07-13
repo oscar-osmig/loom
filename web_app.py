@@ -261,18 +261,33 @@ def forget_user_facts(loom, username: str) -> int:
     return loom.forget_user(username)
 
 
+# Max triples per bulk insert. Large payloads are split into chunks so each
+# storage round-trip is bounded (no single huge insert_many / BSON payload) and
+# progress is incremental — keeps very long imports well under the request
+# timeout instead of one giant operation that can stall.
+TRAIN_CHUNK_SIZE = 1000
+
+
 def _train_triples(loom, triples):
     """Bulk-train a list of (subject, relation, object) triples.
 
-    Uses add_facts_batch — one bulk insert, one cache rebuild, inference
-    deferred to the background daemon — instead of per-fact add_fact, which
-    costs several storage round-trips per fact (very slow against a remote
-    MongoDB like Atlas). Returns (loaded_count, extra_message).
+    Uses add_facts_batch — one bulk insert per chunk, inference deferred to the
+    background daemon — instead of per-fact add_fact, which costs several
+    storage round-trips per fact (very slow against a remote MongoDB like
+    Atlas). Long payloads are chunked so no single operation is unbounded.
+    Returns (loaded_count, extra_message).
     """
     if not triples:
         return 0, ''
+
+    inserted = duplicates = invalid = 0
     try:
-        result = loom.add_facts_batch(triples)
+        for i in range(0, len(triples), TRAIN_CHUNK_SIZE):
+            chunk = triples[i:i + TRAIN_CHUNK_SIZE]
+            result = loom.add_facts_batch(chunk)
+            inserted += result.get('inserted', 0)
+            duplicates += result.get('duplicates', 0)
+            invalid += result.get('invalid', 0)
     except ImportError:
         # pandas unavailable — fall back to the per-fact path
         count = 0
@@ -280,13 +295,14 @@ def _train_triples(loom, triples):
             loom.add_fact(s, r, o)
             count += 1
         return count, ''
+
     parts = []
-    if result.get('duplicates'):
-        parts.append(f"{result['duplicates']} duplicates skipped")
-    if result.get('invalid'):
-        parts.append(f"{result['invalid']} invalid entries rejected")
+    if duplicates:
+        parts.append(f"{duplicates} duplicates skipped")
+    if invalid:
+        parts.append(f"{invalid} invalid entries rejected")
     extra = f" ({', '.join(parts)})" if parts else ''
-    return result.get('inserted', 0), extra
+    return inserted, extra
 
 
 def _process_training_file(file, loom) -> dict:
