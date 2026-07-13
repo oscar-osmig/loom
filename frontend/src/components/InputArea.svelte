@@ -5,7 +5,7 @@
     import { showSpinner, hideSpinner } from '../stores/training.svelte.js';
     import { showToast } from '../stores/toast.svelte.js';
     import { sendChat, uploadTrainingBatch } from '../lib/api.js';
-    import { isValidName, escapeHtml } from '../lib/utils.js';
+    import { isValidName, escapeHtml, sanitizeServerHtml } from '../lib/utils.js';
 
     let textarea = $state(null);
     let sending = $state(false);
@@ -115,7 +115,6 @@
 
         // Handle /clear locally
         if (msgLower.startsWith('/') && cmdMessage === 'clear') {
-            const { clearMessages } = await import('../stores/chat.svelte.js');
             clearMessages();
             return;
         }
@@ -164,7 +163,7 @@
             }
 
             if (data.error) {
-                addMessage(data.error, 'error');
+                addMessage(sanitizeServerHtml(data.error), 'error');
                 return;
             }
 
@@ -173,7 +172,7 @@
             // Forget commands: clear chat, reset graph, show confirmation
             if (isForget && responseType === 'info') {
                 clearMessages();
-                addMessage(data.response, 'info');
+                addMessage(sanitizeServerHtml(data.response), 'info');
                 if (data.action === 'graph_reset') {
                     triggerGraphReset();
                 }
@@ -183,7 +182,7 @@
             // Route help and info to the info panel, style to style page
             if (responseType === 'help' || responseType === 'info') {
                 const title = responseType === 'help' ? 'Help' : 'Info';
-                showInfoPanel(title, data.response);
+                showInfoPanel(title, sanitizeServerHtml(data.response));
             } else if (responseType === 'style') {
                 setStylePageOpen(true);
             } else if (responseType === 'visualize') {
@@ -193,7 +192,7 @@
             } else if (responseType === 'load_results') {
                 showLoadResults(data.meta);
             } else {
-                addMessage(data.response, responseType, data.meta);
+                addMessage(sanitizeServerHtml(data.response), responseType, data.meta);
             }
         } catch (err) {
             setTyping(false);

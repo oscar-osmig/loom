@@ -14,7 +14,6 @@ nul
 
 # Project folders (user-specific data)
 img/
-tests/
 loom_memory/
 
 # Old individual file ignores (now covered by folders)

@@ -20,6 +20,7 @@ export const auth = $state({
     email: readStorage('loom_user_email'),
     picture: readStorage('loom_user_picture'),
     authMethod: readStorage('loom_auth_method') || '', // 'guest' | 'google'
+    idToken: readStorage('loom_id_token'),
     googleClientId: null,
 });
 
@@ -52,6 +53,10 @@ export function setUser(name, opts) {
         auth.authMethod = opts.authMethod;
         writeStorage('loom_auth_method', auth.authMethod);
     }
+    if (opts?.idToken !== undefined) {
+        auth.idToken = opts.idToken || '';
+        writeStorage('loom_id_token', auth.idToken);
+    }
 }
 
 export function signOut() {
@@ -59,10 +64,12 @@ export function signOut() {
     auth.email = '';
     auth.picture = '';
     auth.authMethod = '';
+    auth.idToken = '';
     writeStorage('loom_user', '');
     writeStorage('loom_user_email', '');
     writeStorage('loom_user_picture', '');
     writeStorage('loom_auth_method', '');
+    writeStorage('loom_id_token', '');
 }
 
 export async function initGoogle() {

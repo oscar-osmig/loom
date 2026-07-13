@@ -11,8 +11,9 @@ Enhanced with:
 
 import threading
 import time
+from collections import deque
 from typing import List, Set, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from .normalizer import prettify_cause, prettify_effect
@@ -49,7 +50,10 @@ class InferenceEngine:
 
     def __init__(self, loom):
         self.loom = loom
-        self.inferences = []  # Track inferred facts
+        # Bounded: inferred facts are already persisted to storage, so this is
+        # only a recent-activity window. An unbounded list leaks in a
+        # long-running server.
+        self.inferences = deque(maxlen=2000)  # Track recent inferred facts
         self.running = True
         self._thread = None
 
@@ -73,7 +77,7 @@ class InferenceEngine:
             "source_type": source_type,
             "premises": premises,
             "rule_id": rule_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "speaker_id": None,
             "derivation_id": str(uuid.uuid4())[:8],
         }
@@ -132,11 +136,10 @@ class InferenceEngine:
         # Quick syllogism check for transitive relations
         if relation in TRANSITIVE_RELATIONS:
             self._check_chain_from(subject, relation)
-            # Also check nodes pointing to subject
-            for node in list(self.loom.knowledge.keys()):
-                targets = self.loom.get(node, relation) or []
-                if subject in targets:
-                    self._check_chain_from(node, relation)
+            # Also check nodes pointing to subject (reverse-index lookup instead
+            # of scanning every node with a storage query per node).
+            for node in self.loom.subjects_pointing_to(subject, relation):
+                self._check_chain_from(node, relation)
 
     def _has_confident_facts(self, concept: str) -> bool:
         """Check whether a concept has at least one high or medium confidence fact."""
@@ -354,8 +357,12 @@ class InferenceEngine:
             if not self.loom.recent:
                 continue
 
-            batch = self.loom.recent[:]
-            self.loom.recent.clear()
+            # Atomic swap: rebind `recent` to a fresh list so a concurrent
+            # append from a request thread can't be dropped between a slice and
+            # a clear (the old lost-update bug).
+            with self.loom._lock:
+                batch = self.loom.recent
+                self.loom.recent = []
 
             for subj, rel, obj in batch:
                 # Apply transitive chaining (hypothetical syllogism)
@@ -372,16 +379,20 @@ class InferenceEngine:
 
     def _propagate_properties(self, subject: str):
         """Copy properties across looks_like relationships."""
-        for other in list(self.loom.knowledge.keys()):
-            if other != subject:
-                if (self.loom.get(other, "looks_like") == [subject] or
-                        self.loom.get(subject, "looks_like") == [other]):
-                    self.loom.copy_properties(other, subject)
-                    self.loom.copy_properties(subject, other)
+        # Only nodes linked to `subject` by looks_like (in either direction) can
+        # match — look them up directly instead of scanning the whole graph.
+        candidates = set(self.loom.subjects_pointing_to(subject, "looks_like"))
+        candidates.update(self.loom.get(subject, "looks_like") or [])
+        candidates.discard(subject)
+        for other in candidates:
+            if (self.loom.get(other, "looks_like") == [subject] or
+                    self.loom.get(subject, "looks_like") == [other]):
+                self.loom.copy_properties(other, subject)
+                self.loom.copy_properties(subject, other)
 
-                    # Strengthen the connection
-                    if hasattr(self.loom, 'strengthen_connection'):
-                        self.loom.strengthen_connection(subject, "looks_like", other, 0.1)
+                # Strengthen the connection
+                if hasattr(self.loom, 'strengthen_connection'):
+                    self.loom.strengthen_connection(subject, "looks_like", other, 0.1)
 
     def _deep_inherit(self, instance: str, relation: str, depth: int = 0, max_depth: int = 3):
         """
@@ -452,12 +463,10 @@ class InferenceEngine:
         # Check chain FROM this subject
         self._check_chain_from(subject, relation)
 
-        # Also check all nodes that point TO this subject
-        # (they might now have longer chains)
-        for node in list(self.loom.knowledge.keys()):
-            targets = self.loom.get(node, relation) or []
-            if subject in targets:
-                self._check_chain_from(node, relation)
+        # Also check all nodes that point TO this subject (they might now have
+        # longer chains) — reverse-index lookup instead of a full-graph scan.
+        for node in self.loom.subjects_pointing_to(subject, relation):
+            self._check_chain_from(node, relation)
 
     def _check_chain_from(self, subject: str, relation: str):
         """Check and record transitive inferences from a subject.
@@ -552,7 +561,7 @@ class InferenceEngine:
 
     def get_inferences(self) -> list:
         """Return all inferred facts."""
-        return self.inferences.copy()
+        return list(self.inferences)
 
     def find_analogies(self, concept: str) -> List[Tuple[str, float]]:
         """

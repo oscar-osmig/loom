@@ -18,29 +18,33 @@ See `WHERE_WE_LEFT_OFF.md` for full development status and roadmap.
 python main.py
 ```
 
-This starts an interactive CLI. Within the CLI:
-- Type natural language statements to teach facts: `dogs are animals`
-- Ask questions: `what are dogs?`
-- Use commands: `help`, `show`, `train animals`, `neuron dogs`, `verbose`, `quit`
+`main.py` launches the Flask web server (it imports `web_app.app` and calls
+`app.run`). Open `http://localhost:5000` and interact through the Svelte web
+UI. For a production deployment use the WSGI entry point instead:
 
-**Windows:** If Unicode box-drawing characters fail, run with:
 ```bash
-set PYTHONIOENCODING=utf-8 && python main.py
+gunicorn main:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:5000
 ```
 
-**Optional dependencies:**
-- `pymongo` - MongoDB storage (falls back to JSON file if unavailable)
-- `flask` - Web interface (`python web_app.py`)
+(A single worker is intentional — the knowledge graph and the background
+inference daemon are per-process state; threads provide request concurrency.)
+
+An interactive text CLI also exists in `loom/cli.py` (teach facts like
+`dogs are animals`, ask `what are dogs?`, run commands like `help`, `show`,
+`train animals`, `neuron dogs`). It is not currently wired to an entry point.
+
+**Dependencies:** see `requirements.txt` (runtime) and `requirements-dev.txt`
+(tests). MongoDB is required (`MONGO_URI`); `openai-whisper` is optional for
+speech input.
 
 ## Web Interface
 
-```bash
-pip install flask
-python web_app.py
-```
-
-Flask REST API serving `web_chat.html` at `http://localhost:5000`. Endpoint:
-- `POST /api/chat` - Process messages (supports all CLI commands)
+The Flask REST API (`web_app.py`) serves the built Svelte SPA from `static/`
+at `http://localhost:5000`. Key endpoints:
+- `POST /api/chat` — process messages (supports all commands)
+- `GET  /api/graph` — knowledge graph for the visualizer
+- Admin/ownership endpoints require a verified Google ID token sent as
+  `Authorization: Bearer <id_token>` (never a client-supplied email).
 
 ## Architecture
 
@@ -121,15 +125,17 @@ Storage backend is selected automatically via `get_storage()`.
 ## Project Structure
 
 ```
-neuro/
-├── main.py, web_app.py   # Entry points
-├── img/                  # Screenshots/diagrams (gitignored)
-├── tests/                # Test suite (gitignored)
-├── loom_memory/          # Persistent storage (gitignored)
-│   ├── loom_memory.json
-│   └── loom_rules.json
+loom/  (repo root)
+├── main.py, web_app.py   # Web server entry points
+├── loom/                 # Main Python package (brain, parser, storage, ...)
+├── frontend/             # Svelte 5 source (built by Vite)
+├── static/               # Built SPA served by Flask (Vite output)
+├── tests/                # Pytest suite (run: pytest tests/)
 ├── docs/                 # Documentation
-└── loom/                 # Main package
+├── requirements.txt      # Runtime dependencies
+├── requirements-dev.txt  # Test dependencies
+├── img/                  # Screenshots/diagrams (gitignored)
+└── loom_memory/          # Local storage / JSON fallback (gitignored)
 ```
 
 ## Knowledge Representation

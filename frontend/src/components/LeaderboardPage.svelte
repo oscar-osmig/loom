@@ -20,14 +20,14 @@
         { id: 'messages', label: 'Most Active', icon: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z' },
     ];
 
-    const activeList = $derived(() => {
+    const activeList = $derived.by(() => {
         if (!data) return [];
         if (activeTab === 'neurons') return data.by_neurons || [];
         if (activeTab === 'corrections') return data.by_corrections || [];
         return data.by_messages || [];
     });
 
-    const activeKey = $derived(() => {
+    const activeKey = $derived.by(() => {
         if (activeTab === 'neurons') return 'neurons';
         if (activeTab === 'corrections') return 'corrections';
         return 'messages';
@@ -85,11 +85,11 @@
             </div>
 
             <!-- Ranked list -->
-            {#if activeList().length === 0}
+            {#if activeList.length === 0}
                 <div class="empty">No data yet. Start teaching Loom!</div>
             {:else}
-                {@const list = activeList()}
-                {@const key = activeKey()}
+                {@const list = activeList}
+                {@const key = activeKey}
                 {@const mx = maxVal(list, key)}
                 <div class="rank-list">
                     {#each list as user, i}

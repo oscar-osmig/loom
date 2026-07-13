@@ -16,23 +16,30 @@ const COLOR_NEW = 'hsl(140, 75%, 50%)';
 const COLOR_SYSTEM = 'hsl(260, 70%, 60%)';
 const COLOR_LONELY = 'hsl(30, 90%, 55%)';
 
+// Cached background gradient (recreated only when the canvas size or context changes)
+let _bgCache = { grad: null, ctx: null, width: 0, height: 0 };
+
 // ============================================================ main render
 
 export function render(ctx, engine, width, height) {
     const { zoom, panX, panY } = engine;
     const lod = zoom < LOD_FAR ? 'FAR' : zoom < LOD_MEDIUM ? 'MEDIUM' : 'CLOSE';
 
-    const _nodeById = new Map();
-    for (const node of engine.nodes) _nodeById.set(node.id, node);
+    // Node lookup: reuse the engine's id->node map (kept in sync by init/refresh)
+    const _nodeById = engine._nodeMap;
 
     // 1. Background
-    const bgGrad = ctx.createRadialGradient(
-        width / 2, height / 2, 0,
-        width / 2, height / 2, Math.max(width, height) * 0.8
-    );
-    bgGrad.addColorStop(0, '#0d1025');
-    bgGrad.addColorStop(1, '#050510');
-    ctx.fillStyle = bgGrad;
+    if (!_bgCache.grad || _bgCache.ctx !== ctx ||
+        _bgCache.width !== width || _bgCache.height !== height) {
+        const bgGrad = ctx.createRadialGradient(
+            width / 2, height / 2, 0,
+            width / 2, height / 2, Math.max(width, height) * 0.8
+        );
+        bgGrad.addColorStop(0, '#0d1025');
+        bgGrad.addColorStop(1, '#050510');
+        _bgCache = { grad: bgGrad, ctx, width, height };
+    }
+    ctx.fillStyle = _bgCache.grad;
     ctx.fillRect(0, 0, width, height);
 
     // 2. Camera

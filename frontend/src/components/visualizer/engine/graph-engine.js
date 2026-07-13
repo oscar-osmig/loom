@@ -44,6 +44,9 @@ export class GraphEngine {
         // Discovery animation flag
         this.isDiscovering = false;
 
+        // Total kinetic energy from the last physics step (used for idle detection)
+        this.kineticEnergy = Infinity;
+
         // Internal
         this._nodeMap = new Map();
     }
@@ -263,6 +266,9 @@ export class GraphEngine {
                 }
             }
         }
+
+        // New/changed data may need to settle again
+        this.kineticEnergy = Infinity;
     }
 
     // ----------------------------------------------------------------- tick
@@ -275,7 +281,7 @@ export class GraphEngine {
         if (n === 0) return;
 
         // ---- Repulsion ----------------------------------------------------
-        if (n > 200) {
+        if (n > 64) {
             this._gridRepulsion();
         } else {
             this._pairwiseRepulsion(n);
@@ -313,6 +319,7 @@ export class GraphEngine {
         // ---- Integration --------------------------------------------------
         const damping = 0.96;
         const maxVelocity = 3;
+        let kineticEnergy = 0;
 
         for (const node of this.nodes) {
             // Skip pinned / dragged node
@@ -338,7 +345,21 @@ export class GraphEngine {
 
             node.x += node.vx;
             node.y += node.vy;
+            kineticEnergy += node.vx * node.vx + node.vy * node.vy;
+        }
 
+        this.kineticEnergy = kineticEnergy;
+
+        // ---- Animations & particles ----------------------------------------
+        this.tickEffects();
+    }
+
+    /**
+     * Advance only the visual animations (pulses, appear transitions, particles)
+     * without running the physics simulation. Used when the layout is settled.
+     */
+    tickEffects() {
+        for (const node of this.nodes) {
             // Pulse animation (slow, subtle)
             node.pulsePhase += 0.012;
 
@@ -364,6 +385,26 @@ export class GraphEngine {
 
         // Update probe particles
         this._updateProbeParticles();
+    }
+
+    /**
+     * True when the force layout has (nearly) stopped moving.
+     * @returns {boolean}
+     */
+    isSettled() {
+        return this.kineticEnergy < 0.001;
+    }
+
+    /**
+     * True when any particle/wave/spark/tendril effect is still animating.
+     * @returns {boolean}
+     */
+    hasActiveEffects() {
+        return this.probeParticles.length > 0 ||
+            this.signalParticles.length > 0 ||
+            this.pulseWaves.length > 0 ||
+            this.sparkEffects.length > 0 ||
+            this.seekingTendrils.length > 0;
     }
 
     // --------------------------------------------------------- camera utils
@@ -529,20 +570,16 @@ export class GraphEngine {
     }
 
     /**
-     * O(n^2) pairwise repulsion with skip optimisation for n > 80.
+     * O(n^2) pairwise repulsion for small graphs (grid repulsion covers n > 64).
      * @param {number} n
      * @private
      */
     _pairwiseRepulsion(n) {
         const repulsionStrength = 800;
-        const skipThreshold = 80;
 
         for (let i = 0; i < n; i++) {
             const a = this.nodes[i];
             for (let j = i + 1; j < n; j++) {
-                // Skip distant pairs probabilistically for large-ish graphs
-                if (n > skipThreshold && (i + j) % 3 === 0) continue;
-
                 const b = this.nodes[j];
                 let dx = b.x - a.x;
                 let dy = b.y - a.y;
@@ -571,7 +608,7 @@ export class GraphEngine {
     }
 
     /**
-     * Grid-based repulsion for large node counts (n > 200).
+     * Grid-based repulsion for larger node counts (n > 64).
      * @private
      */
     _gridRepulsion() {
@@ -579,8 +616,10 @@ export class GraphEngine {
         const repulsionStrength = 800;
         const grid = new Map();
 
-        // Assign nodes to grid cells
-        for (const node of this.nodes) {
+        // Assign nodes to grid cells (and a numeric index for pair dedup)
+        for (let i = 0; i < this.nodes.length; i++) {
+            const node = this.nodes[i];
+            node._idx = i;
             const cx = Math.floor(node.x / cellSize);
             const cy = Math.floor(node.y / cellSize);
             const key = `${cx},${cy}`;
@@ -602,7 +641,7 @@ export class GraphEngine {
                     if (!cell) continue;
 
                     for (const other of cell) {
-                        if (other === node || other.id <= node.id) continue;
+                        if (other === node || other._idx <= node._idx) continue;
 
                         let ddx = other.x - node.x;
                         let ddy = other.y - node.y;

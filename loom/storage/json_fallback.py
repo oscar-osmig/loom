@@ -8,7 +8,7 @@ Supports Quad + Properties schema:
 """
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 
@@ -115,7 +115,7 @@ class JSONFallbackStorage:
 
         # Build properties from new format or legacy parameters
         props = dict(DEFAULT_PROPERTIES)
-        props["created_at"] = datetime.utcnow().isoformat()
+        props["created_at"] = datetime.now(timezone.utc).isoformat()
 
         if properties:
             # New format - use provided properties

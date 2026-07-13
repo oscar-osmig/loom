@@ -2,6 +2,7 @@
     import { sendFeedback, submitResponseEdit } from '../lib/api.js';
     import { auth } from '../stores/auth.svelte.js';
     import { updateMessage, markFeedback } from '../stores/chat.svelte.js';
+    import { escapeHtml } from '../lib/utils.js';
 
     let { id, content, type = 'assistant', meta = undefined, userInput = '', feedbackRating = null } = $props();
 
@@ -56,7 +57,7 @@
                 user: auth.user,
                 input_text: userInput,
             });
-            updateMessage(id, cleaned);
+            updateMessage(id, escapeHtml(cleaned).replace(/\n/g, '<br>'));
             editSaved = true;
         } catch {}
         editSaving = false;

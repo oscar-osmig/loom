@@ -42,6 +42,11 @@
     let animFrameId = null;
     let cleanupInteractions = null;
     let refreshInterval = null;
+    let resizeTimer = null;
+    let openGeneration = 0;   // guards against double-init on rapid open/close
+    let needsRender = false;  // wakes the render loop from idle
+    let lastCamera = { zoom: 0, panX: 0, panY: 0 };
+    let idleFrameCount = 0;
 
     // Relation colors
     const RELATION_COLORS = {
@@ -78,10 +83,16 @@
             cancelAnimationFrame(animFrameId);
             if (cleanupInteractions) cleanupInteractions();
             if (refreshInterval) clearInterval(refreshInterval);
+            if (resizeTimer) clearTimeout(resizeTimer);
         };
     });
 
     async function openVisualizer() {
+        // Re-entrancy guard: tear down any previous run and invalidate
+        // in-flight opens so rapid toggles can't double-init.
+        teardown();
+        const gen = ++openGeneration;
+
         loading = true;
         detailNode = null;
         searchQuery = '';
@@ -90,6 +101,7 @@
 
         const data = await fetchGraph();
 
+        if (gen !== openGeneration || !ui.vizOpen) { return; }
         if (data.error) { loading = false; return; }
 
         graphData = data;
@@ -100,6 +112,7 @@
 
         await waitFrame();
 
+        if (gen !== openGeneration || !ui.vizOpen) { return; }
         if (!canvas) { loading = false; return; }
 
         ctx = canvas.getContext('2d');
@@ -116,16 +129,24 @@
         });
 
         loading = false;
+        needsRender = true;
         startAnimationLoop();
         refreshInterval = setInterval(refreshGraphData, 30000);
     }
 
-    function closeVisualizer() {
-        if (engine) engine.saveCachedLayout();
+    /** Stop the loop, interactions, timers — safe to call multiple times. */
+    function teardown() {
         cancelAnimationFrame(animFrameId);
         animFrameId = null;
         if (cleanupInteractions) { cleanupInteractions(); cleanupInteractions = null; }
         if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+        if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
+    }
+
+    function closeVisualizer() {
+        openGeneration++; // invalidate any in-flight open
+        if (engine) engine.saveCachedLayout();
+        teardown();
         detailNode = null;
         searchOpen = false;
     }
@@ -133,11 +154,57 @@
     // ------------------------------------------------------------------ animation
 
     function startAnimationLoop() {
+        lastCamera = { zoom: 0, panX: 0, panY: 0 };
+        idleFrameCount = 0;
+        let lastHovered = null;
+        let lastSelected = null;
+        let idleRendered = false;
+
         function frame() {
             if (!engine || !ctx || !ui.vizOpen) return;
+
+            const cameraMoved =
+                engine.zoom !== lastCamera.zoom ||
+                engine.panX !== lastCamera.panX ||
+                engine.panY !== lastCamera.panY;
+            const highlightChanged =
+                engine.hoveredNode !== lastHovered ||
+                engine.selectedNode !== lastSelected;
+            const interacting = !!engine.draggedNode || cameraMoved || highlightChanged;
+
+            if (!interacting && !needsRender && engine.isSettled()) {
+                if (!engine.hasActiveEffects() && !engine.selectedNode) {
+                    // Fully idle: layout settled, nothing animating — render one
+                    // final frame, then skip physics and rendering while cheaply
+                    // polling for wake-ups (interaction, graph refresh, resize).
+                    if (!idleRendered) {
+                        render(ctx, engine, width, height);
+                        idleRendered = true;
+                    }
+                    animFrameId = requestAnimationFrame(frame);
+                    return;
+                }
+                // Settled but ambient particles still animating: skip physics
+                // entirely and render at half rate.
+                idleRendered = false;
+                idleFrameCount++;
+                if (idleFrameCount % 2 === 0) {
+                    engine.tickEffects();
+                    render(ctx, engine, width, height);
+                }
+                animFrameId = requestAnimationFrame(frame);
+                return;
+            }
+
+            idleRendered = false;
+            idleFrameCount = 0;
+            needsRender = false;
             engine.tick();
             render(ctx, engine, width, height);
             zoomPercent = Math.round(engine.zoom * 100);
+            lastCamera = { zoom: engine.zoom, panX: engine.panX, panY: engine.panY };
+            lastHovered = engine.hoveredNode;
+            lastSelected = engine.selectedNode;
             animFrameId = requestAnimationFrame(frame);
         }
         animFrameId = requestAnimationFrame(frame);
@@ -149,8 +216,8 @@
         if (!canvas) return;
         width = window.innerWidth;
         height = window.innerHeight;
-        // Use at least 2x resolution for crisp rendering at all zoom levels
-        const dpr = Math.max(window.devicePixelRatio || 1, 2);
+        // Actual device pixel ratio, capped at 2x to bound buffer size
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
         canvas.width = width * dpr;
         canvas.height = height * dpr;
         canvas.style.width = width + 'px';
@@ -160,8 +227,29 @@
     }
 
     function handleResize() {
-        resizeCanvas();
-        if (engine) engine.centerAndZoomToFit(width, height);
+        if (!ui.vizOpen) return;
+        // Debounce: window resize fires continuously while dragging
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            resizeTimer = null;
+            resizeCanvas();
+            if (engine) engine.centerAndZoomToFit(width, height);
+            needsRender = true;
+        }, 150);
+    }
+
+    // ------------------------------------------------------------------ visibility
+
+    function handleVisibilityChange() {
+        if (!ui.vizOpen || !engine) return;
+        if (document.hidden) {
+            // Pause background polling while the tab is hidden
+            if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+        } else if (!refreshInterval) {
+            // Back to visible: refresh immediately and resume polling
+            refreshGraphData();
+            refreshInterval = setInterval(refreshGraphData, 30000);
+        }
     }
 
     // ------------------------------------------------------------------ refresh
@@ -177,6 +265,7 @@
         isDiscovering = discoveryCount > 0;
         engine.isDiscovering = isDiscovering;
         engine.refreshGraph(data);
+        needsRender = true;
     }
 
     // ------------------------------------------------------------------ interactions
@@ -356,6 +445,7 @@
 </script>
 
 <svelte:window onkeydown={handleKeydown} onresize={handleResize} />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
 
 {#if ui.vizOpen}
     <div class="viz-overlay" role="dialog" aria-label="Neural graph visualizer">

@@ -46,3 +46,25 @@ export function escapeHtml(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 }
+
+/**
+ * Sanitize server-generated response HTML before rendering with {@html}.
+ *
+ * The backend composes responses with a small set of formatting tags
+ * (<b>, <i>, <br>) and &nbsp; entities, but interpolates user-taught
+ * concept names into them unescaped. Escape everything first, then
+ * restore only the app's own known-safe formatting so injected markup
+ * renders as inert text.
+ * @param {string} str
+ * @returns {string}
+ */
+export function sanitizeServerHtml(str) {
+    if (!str || typeof str !== 'string') return '';
+
+    return escapeHtml(str)
+        // Restore the app's own formatting tags (no attributes allowed)
+        .replace(/&lt;(\/?)(b|i|u|em|strong)&gt;/gi, '<$1$2>')
+        .replace(/&lt;br\s*\/?&gt;/gi, '<br>')
+        // Restore harmless character entities the server emits (e.g. &nbsp;)
+        .replace(/&amp;(nbsp|amp|lt|gt|quot|#39|#x27|bull|middot);/gi, '&$1;');
+}
