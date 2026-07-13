@@ -17,7 +17,7 @@ Install pymongo: pip install pymongo
 
 from collections import defaultdict
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,32 @@ class MongoStorage:
             ("relation", ASCENDING)
         ], name="idx_inference_subject")
 
+        # Secondary collections queried/aggregated by instance (and by user or
+        # subject). Without these, every leaderboard / correction / conversation
+        # / style lookup is a full collection scan.
+        self.db.corrections.create_index(
+            [("instance", ASCENDING), ("subject", ASCENDING)],
+            name="idx_corrections_subject")
+        self.db.corrections.create_index(
+            [("instance", ASCENDING), ("corrected_by", ASCENDING)],
+            name="idx_corrections_user")
+        self.db.user_stats.create_index(
+            [("instance", ASCENDING), ("user", ASCENDING)],
+            unique=True, name="idx_user_stats")
+        self.db.feedback.create_index(
+            [("instance", ASCENDING)], name="idx_feedback_instance")
+        self.db.response_edits.create_index(
+            [("instance", ASCENDING)], name="idx_response_edits_instance")
+        self.db.conversations.create_index(
+            [("instance", ASCENDING), ("conversation_id", ASCENDING)],
+            name="idx_conversations")
+        self.db.style_patterns.create_index(
+            [("instance", ASCENDING)], name="idx_style_patterns_instance")
+        self.db.loom_instances.create_index(
+            "instance_name", unique=True, name="idx_loom_instance_name")
+        self.db.loom_instances.create_index(
+            "owner_email", name="idx_loom_instance_owner")
+
     # ==================== FACTS ====================
 
     def add_fact(self, subject: str, relation: str, obj: str,
@@ -160,7 +186,7 @@ class MongoStorage:
 
         # Build properties from new format or legacy parameters
         props = dict(DEFAULT_PROPERTIES)
-        props["created_at"] = datetime.utcnow().isoformat()
+        props["created_at"] = datetime.now(timezone.utc).isoformat()
 
         if properties:
             # New format - use provided properties

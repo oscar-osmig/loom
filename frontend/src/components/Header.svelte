@@ -6,6 +6,7 @@
     import { showToast } from '../stores/toast.svelte.js';
     import { addFile } from '../stores/files.svelte.js';
     import { sendChat, uploadTrainingBatch } from '../lib/api.js';
+    import { sanitizeServerHtml } from '../lib/utils.js';
     import AccountDropdown from './AccountDropdown.svelte';
 
     let fileInput = $state(null);
@@ -15,9 +16,9 @@
         try {
             const data = await sendChat('/stats', auth.user, auth.email, conversationId);
             if (data.error) {
-                addMessage(data.error, 'error');
+                addMessage(sanitizeServerHtml(data.error), 'error');
             } else {
-                showInfoPanel('Stats', data.response);
+                showInfoPanel('Stats', sanitizeServerHtml(data.response));
             }
         } catch {
             addMessage('Failed to fetch stats.', 'error');

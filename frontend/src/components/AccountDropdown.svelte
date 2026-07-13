@@ -25,7 +25,7 @@
             const name = payload.name || payload.given_name || 'User';
             const userEmail = payload.email || '';
             const userPicture = payload.picture || '';
-            setUser(name, { email: userEmail, picture: userPicture, authMethod: 'google' });
+            setUser(name, { email: userEmail, picture: userPicture, authMethod: 'google', idToken: response.credential });
             setHeaderLocked(false);
             dropdownOpen = false;
         } catch (err) {

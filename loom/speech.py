@@ -17,7 +17,7 @@ import logging
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class Transcript:
     audio_duration: float = 0.0
     language: str = "en"
     backend_used: str = ""
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -101,7 +101,7 @@ class SpeechProvenance:
             "confidence": self.confidence,
             "speaker_id": self.speaker_id,
             "audio_source": self.audio_source,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "premises": [],
             "rule_id": None,
             "derivation_id": None,

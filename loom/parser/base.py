@@ -20,7 +20,6 @@ from .constants import (
 )
 
 
-from ..simplifier import SentenceSimplifier
 from ..advanced_simplifier import AdvancedSimplifier
 from ..structural import StructuralExtractor
 
@@ -35,7 +34,6 @@ class Parser:
         self.current_procedure = None  # Name of procedure being defined
         self._response_count = 0  # Track responses for curiosity timing
         self.curiosity_frequency = 5  # Show curiosity question every N responses
-        self.simplifier = SentenceSimplifier()  # For basic simplification
         self.advanced_simplifier = AdvancedSimplifier()  # For complex sentences
         self.structural = StructuralExtractor()  # Structural metadata extraction
         self._current_context = None  # Context for current input
@@ -635,7 +633,6 @@ class Parser:
             self._check_found_in_query,          # "what X can Y be found in?" - BEFORE can_query!
             self._check_can_query,
             self._check_are_is_query,            # "are X Y?" / "is X Y?"
-            self._check_why_query,
             self._check_what_causes_query,       # "what causes X?"
             self._check_effect_query,
             self._check_lay_eggs_query,          # "which animals lay eggs?" - BEFORE which_query!
@@ -647,7 +644,6 @@ class Parser:
             self._check_temporal_query,          # "what do X do in winter?" - temporal queries
             self._check_currently_query,         # "what is X currently?" - current state queries
             self._check_what_provide_query,      # "what do X provide?"
-            self._check_how_many_query,          # "how many X do Y have?" - BEFORE how_query!
             self._check_how_tall_query,          # "how tall is/are X?" - BEFORE how_query!
             self._check_related_to_query,        # "what are X related to?"
             self._check_immune_to_query,         # "what are X immune to?"
@@ -656,7 +652,6 @@ class Parser:
             self._check_difference_query,        # "what is the difference/how are X different" - before how_query
             self._check_reproduce_query,         # "how do X reproduce?" - before how_query
             self._check_classification_query,    # "what groups are X classified into?"
-            self._check_examples_query,          # "what are examples of X?"
             self._check_breathing_query,         # "how do X breathe?"
             self._check_backbone_query,          # "do X have backbones?"
             self._check_feeding_query,           # "how do X feed their young?"
@@ -774,10 +769,6 @@ class Parser:
         from .queries import _check_what_verb_query
         return _check_what_verb_query(self, t)
 
-    def _check_how_many_query(self, t: str) -> str | None:
-        from .queries import _check_how_many_query
-        return _check_how_many_query(self, t)
-
     def _check_how_tall_query(self, t: str) -> str | None:
         from .queries import _check_how_tall_query
         return _check_how_tall_query(self, t)
@@ -819,10 +810,6 @@ class Parser:
         from .queries import _check_what_is_reverse_query
         return _check_what_is_reverse_query(self, t)
 
-    def _check_examples_query(self, t: str) -> str | None:
-        from .queries import _check_examples_query
-        return _check_examples_query(self, t)
-
     def _check_what_needs_reverse_query(self, t: str) -> str | None:
         from .queries import _check_what_needs_reverse_query
         return _check_what_needs_reverse_query(self, t)
@@ -838,10 +825,6 @@ class Parser:
     def _check_are_is_query(self, t: str) -> str | None:
         from .queries import _check_are_is_query
         return _check_are_is_query(self, t)
-
-    def _check_why_query(self, t: str) -> str | None:
-        from .queries import _check_why_query
-        return _check_why_query(self, t)
 
     def _check_what_causes_query(self, t: str) -> str | None:
         from .queries import _check_what_causes_query
@@ -1185,7 +1168,14 @@ class Parser:
         """
         # Only attempt if sentence has structural complexity
         has_relative = bool(re.search(r"\b(that|which|who)\s+(have|has|can|is|are|was|were|eat|live)", t))
-        has_conjoined = " and " in t and (t.count(",") >= 1 or " and " in t.split(" is ")[0] if " is " in t else True)
+        if " and " not in t:
+            has_conjoined = False
+        elif " is " in t:
+            # A conjunction around an "is" statement: a comma-separated list,
+            # or a conjoined subject ("A and B is ...").
+            has_conjoined = t.count(",") >= 1 or " and " in t.split(" is ")[0]
+        else:
+            has_conjoined = True
         has_multiple_clauses = t.count(",") >= 2
         if not (has_relative or has_conjoined or has_multiple_clauses):
             return None

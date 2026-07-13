@@ -10,4 +10,7 @@ dependsOn = ["frontend"]
 cmds = ["pip install -r requirements.txt"]
 
 [start]
-cmd = "python main.py"
+# Production WSGI server. Single worker on purpose — the in-memory knowledge
+# graph and background inference daemon are per-process state; threads provide
+# request concurrency.
+cmd = "gunicorn main:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:${PORT:-5000}"

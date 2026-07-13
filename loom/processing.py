@@ -37,20 +37,16 @@ class HebbianMixin:
 
     def _get_recent_avg_weight(self: "Loom", n: int = 20) -> float:
         """
-        Compute average weight of the N most recently strengthened connections.
+        Average of the most recently strengthened connection weights.
         Used as the BCM sliding threshold to prevent runaway LTP.
+
+        Backed by a bounded deque (self._recent_weights) so this is O(1)
+        instead of sorting the whole connection_times dict on every call.
         """
-        if not self.connection_times:
-            return INITIAL_WEIGHT
-        dormant = getattr(self, 'dormant_connections', set())
-        recent = sorted(
-            ((k, t) for k, t in self.connection_times.items() if k not in dormant),
-            key=lambda x: x[1], reverse=True
-        )[:n]
+        recent = getattr(self, '_recent_weights', None)
         if not recent:
             return INITIAL_WEIGHT
-        weights = [self.connection_weights.get(key, INITIAL_WEIGHT) for key, _ in recent]
-        return sum(weights) / len(weights)
+        return sum(recent) / len(recent)
 
     def reactivate_connection(self: "Loom", key: Tuple[str, str, str]):
         dormant = getattr(self, 'dormant_connections', None)
@@ -86,6 +82,9 @@ class HebbianMixin:
         new_weight = min(current + effective_amount, MAX_WEIGHT)
         self.connection_weights[key] = new_weight
         self.connection_times[key] = time.time()
+        recent = getattr(self, '_recent_weights', None)
+        if recent is not None:
+            recent.append(new_weight)
 
         if self.verbose:
             print(f"       [strengthened: {subject} ~> {relation} ~> {obj} = {new_weight:.2f}]")
@@ -131,7 +130,7 @@ class HebbianMixin:
         """Get connections above a strength threshold."""
         dormant = getattr(self, 'dormant_connections', set())
         strong = []
-        for key, weight in self.connection_weights.items():
+        for key, weight in list(self.connection_weights.items()):
             if key in dormant:
                 continue
             if weight >= threshold:

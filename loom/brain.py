@@ -18,6 +18,8 @@ Enhanced with:
 """
 
 import time
+import threading
+from collections import deque
 from typing import Dict, List, Tuple
 
 from .normalizer import normalize, prettify_cause, prettify_effect
@@ -44,6 +46,71 @@ CONFIDENCE_LOW = "low"        # Weak inference or old
 
 # Relations that should trigger inheritance propagation
 INHERITABLE_RELATIONS = ["is", "is_a", "type_of", "kind_of"]
+
+# ── Entity-validation vocabularies (module-level so they are built once at
+# import, not rebuilt on every _is_valid_entity call). startswith/endswith
+# accept a tuple of affixes directly; membership sets give O(1) word checks.
+_BAD_ENTITY_STARTS = (
+    "and_", "or_", "but_", "because_", "so_", "yet_",
+    "the_", "a_", "an_",
+    "that_", "which_", "who_", "whom_", "whose_",
+    "when_", "where_", "how_", "why_", "what_",
+    "by_", "for_", "with_", "from_", "to_", "in_", "on_", "at_",
+    "of_", "about_", "into_", "onto_", "upon_",
+    "highly_", "very_", "really_", "sometimes_", "often_",
+    "always_", "never_", "usually_", "also_", "just_",
+    "only_", "even_", "still_", "already_",
+    "is_", "are_", "was_", "were_", "be_", "been_", "being_",
+    "has_", "have_", "had_", "do_", "does_", "did_",
+    "can_", "could_", "will_", "would_", "should_", "may_", "might_",
+)
+_BAD_ENTITY_ENDS = (
+    "_and", "_or", "_but", "_the", "_a", "_an",
+    "_is", "_are", "_was", "_were", "_be",
+    "_has", "_have", "_had", "_do", "_does",
+    "_can", "_will", "_would", "_should",
+    "_to", "_for", "_with", "_from", "_in", "_on", "_at",
+    "_that", "_which", "_who",
+)
+_ENTITY_SENTENCE_VERBS = (
+    "_possess_", "_possesses_", "_contain_", "_contains_",
+    "_include_", "_includes_", "_provide_", "_provides_",
+    "_cause_", "_causes_", "_create_", "_creates_",
+    "_exist_", "_exists_", "_form_", "_forms_",
+    "_call_", "_calls_", "_called_",
+    "_kill_", "_kills_", "_support_", "_supports_",
+)
+_ENTITY_PRONOUNS = frozenset([
+    "they", "them", "it", "he", "she", "we", "i", "you", "your",
+    "this", "that", "these", "those", "its", "their",
+])
+_ENTITY_BAD_FIRST_WORDS = frozenset([
+    "highly", "very", "really", "sometimes", "often", "always",
+    "never", "usually", "incredibly", "extremely", "mostly",
+    "probably", "possibly", "actually", "basically", "generally",
+    "typically", "commonly", "rarely", "frequently", "occasionally",
+    "primarily", "mainly", "largely", "particularly",
+])
+_ENTITY_BAD_LAST_WORDS = frozenset([
+    "is", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "do", "does", "did",
+    "can", "could", "will", "would", "should", "may", "might",
+    "believe", "believes", "think", "thinks", "know", "knows",
+    "say", "says", "said", "make", "makes", "made",
+])
+_ENTITY_SINGLE_WORD_REJECTS = frozenset([
+    "will", "would", "could", "should", "may", "might", "must",
+    "shall", "can", "do", "does", "did", "has", "have", "had",
+    "is", "are", "was", "were", "be", "been", "being",
+    "the", "a", "an", "and", "or", "but", "so", "yet",
+])
+_ENTITY_COMPOUND_VERBS = frozenset([
+    "believe", "believes", "think", "thinks", "say", "says",
+    "make", "makes", "know", "knows", "see", "sees",
+    "show", "shows", "prove", "proves", "suggest", "suggests",
+    "indicate", "indicates", "reveal", "reveals",
+    "composed", "formed", "named", "called",
+])
 
 # Import context detection functions
 from .context_detection import detect_context, detect_temporal, detect_scope
@@ -114,14 +181,27 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         self.storage = get_storage(**storage_kwargs)
         self.use_mongo = True
 
+        # Reentrant lock guarding shared mutable state (the knowledge cache,
+        # connection weight/time dicts and the `recent` batch). A single Loom
+        # instance is shared across Flask request threads plus the background
+        # inference daemon, so read-modify-write hot spots must be serialised.
+        self._lock = threading.RLock()
+
+        # Per-thread request state. The web app serves many users concurrently
+        # on one shared Loom object, so speaker id and active conversation must
+        # be thread-local — otherwise one request's speaker leaks onto another
+        # request's facts. See the `_session_speaker_id`/`_current_conversation_id`
+        # properties below.
+        self._tls = threading.local()
+
         # In-memory cache for fast access (synced with storage)
         self._knowledge_cache = None
+        self._reverse_cache = None  # {(relation, object): set(subjects)}
         self._cache_dirty = True
 
         # Current input context (set by parser during processing)
         self._input_context = None
         self._input_properties = None
-        self._session_speaker_id = None  # Set by web app, persists across parse calls
 
         # Runtime state (not persisted)
         self.conflicts = []  # Current session conflicts
@@ -136,7 +216,6 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Default context used when no conversation_id is set
         self._context_pool: Dict[str, ConversationContext] = {}
         self._default_context = ConversationContext(conversation_id="_default")
-        self._current_conversation_id: str = "_default"
         self._context_pool["_default"] = self._default_context
 
         # Spreading activation network (Collins & Loftus model)
@@ -154,6 +233,11 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
 
         # Track last activation time for each connection (for decay)
         self.connection_times: Dict[Tuple[str, str, str], float] = {}
+
+        # Sliding window of recently strengthened weights, used as the BCM
+        # threshold. A bounded deque gives an O(1) running average instead of
+        # sorting the entire connection_times dict on every strengthen call.
+        self._recent_weights: deque = deque(maxlen=20)
 
         self.dormant_connections: set = set()
         self.dormant_entities: set = set()
@@ -252,26 +336,94 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         # Invalidate cache after adding
         self._invalidate_cache()
 
+    # ── Per-thread request state ──────────────────────────────────────
+    # These are stored thread-locally so concurrent web requests don't clobber
+    # each other's speaker attribution or active conversation on the shared
+    # Loom instance.
+
+    @property
+    def _session_speaker_id(self):
+        return getattr(self._tls, "speaker_id", None)
+
+    @_session_speaker_id.setter
+    def _session_speaker_id(self, value):
+        self._tls.speaker_id = value
+
+    @property
+    def _current_conversation_id(self) -> str:
+        return getattr(self._tls, "conversation_id", "_default")
+
+    @_current_conversation_id.setter
+    def _current_conversation_id(self, value: str):
+        self._tls.conversation_id = value
+
     @property
     def knowledge(self) -> dict:
         """Get knowledge graph (cached from storage)."""
-        if self._cache_dirty or self._knowledge_cache is None:
-            raw = self.storage.get_all_knowledge()
-            if self.dormant_entities:
-                filtered = {}
-                for entity, relations in raw.items():
-                    if entity in self.dormant_entities:
-                        continue
-                    filtered[entity] = relations
-                self._knowledge_cache = filtered
-            else:
-                self._knowledge_cache = raw
-            self._cache_dirty = False
-        return self._knowledge_cache
+        cache = self._knowledge_cache
+        if self._cache_dirty or cache is None:
+            with self._lock:
+                # Re-check under the lock so only one thread rebuilds.
+                if self._cache_dirty or self._knowledge_cache is None:
+                    raw = self.storage.get_all_knowledge()
+                    if self.dormant_entities:
+                        filtered = {}
+                        for entity, relations in raw.items():
+                            if entity in self.dormant_entities:
+                                continue
+                            filtered[entity] = relations
+                        cache = filtered
+                    else:
+                        cache = raw
+                    self._knowledge_cache = cache
+                    self._reverse_cache = None  # rebuilt lazily from new snapshot
+                    self._cache_dirty = False
+                else:
+                    cache = self._knowledge_cache
+        # Return the local reference so a concurrent invalidate/forget that nulls
+        # the attribute can't turn this into None mid-return.
+        return cache
+
+    @property
+    def reverse_index(self) -> Dict[str, Dict[str, set]]:
+        """Reverse adjacency index: object -> {relation -> {subjects}}.
+
+        Built from the in-memory knowledge snapshot and cached alongside it.
+        Lets inference answer "which nodes point to X via relation R?" (and
+        "every incoming edge of X") with a dict lookup instead of scanning every
+        node and issuing a storage query per node.
+        """
+        rev = self._reverse_cache
+        if rev is None:
+            kg = self.knowledge
+            with self._lock:
+                rev = self._reverse_cache
+                if rev is None:
+                    rev = {}
+                    for subj, relations in kg.items():
+                        for rel, objects in relations.items():
+                            for obj in objects:
+                                rev.setdefault(obj, {}).setdefault(rel, set()).add(subj)
+                    self._reverse_cache = rev
+        # Return the local reference: a concurrent _invalidate_cache() may null
+        # self._reverse_cache right after we release the lock, and re-reading the
+        # attribute here could hand back None.
+        return rev
+
+    def subjects_pointing_to(self, obj: str, relation: str) -> set:
+        """Return the set of subjects S such that (S, relation, obj) exists."""
+        return self.reverse_index.get(obj, {}).get(relation, set())
+
+    def incoming_edges(self, obj: str):
+        """Yield (subject, relation) for every edge pointing at `obj`."""
+        for rel, subjects in self.reverse_index.get(obj, {}).items():
+            for subj in subjects:
+                yield subj, rel
 
     def _invalidate_cache(self):
         """Mark cache as needing refresh."""
         self._cache_dirty = True
+        self._reverse_cache = None
 
     # ── Access tracking and concept reinforcement ─────────────────────
 
@@ -290,11 +442,19 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         self.last_accessed[entity] = time.time()
         count = self.access_counts[entity]
 
-        # Every 5 accesses, boost connections involving this entity
+        # Every 5 accesses, boost connections involving this entity. Only the
+        # edges incident to `entity` matter, so gather those directly (O(degree))
+        # instead of scanning the whole connection_weights dict (O(total edges)).
         if count % 5 == 0:
-            for key in list(self.connection_weights.keys()):
-                subj, rel, obj = key
-                if subj == entity or obj == entity:
+            weights = self.connection_weights
+            incident = []
+            for rel, objects in self.knowledge.get(entity, {}).items():
+                for obj in objects:
+                    incident.append((entity, rel, obj))
+            for subj, rel in self.incoming_edges(entity):
+                incident.append((subj, rel, entity))
+            for subj, rel, obj in incident:
+                if (subj, rel, obj) in weights:
                     self.strengthen_connection(subj, rel, obj, amount=0.1)
 
         # At 20+ accesses, promote to core concept (never goes dormant)
@@ -412,109 +572,39 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             return False
 
         # Reject names starting with bad patterns (malformed parsing)
-        bad_starts = [
-            # Conjunctions
-            "and_", "or_", "but_", "because_", "so_", "yet_",
-            # Articles
-            "the_", "a_", "an_",
-            # Relative pronouns
-            "that_", "which_", "who_", "whom_", "whose_",
-            # Question words
-            "when_", "where_", "how_", "why_", "what_",
-            # Prepositions
-            "by_", "for_", "with_", "from_", "to_", "in_", "on_", "at_",
-            "of_", "about_", "into_", "onto_", "upon_",
-            # Adverbs (indicate sentence fragments)
-            "highly_", "very_", "really_", "sometimes_", "often_",
-            "always_", "never_", "usually_", "also_", "just_",
-            "only_", "even_", "still_", "already_",
-            # Verbs that indicate sentence fragments
-            "is_", "are_", "was_", "were_", "be_", "been_", "being_",
-            "has_", "have_", "had_", "do_", "does_", "did_",
-            "can_", "could_", "will_", "would_", "should_", "may_", "might_",
-        ]
-        for bad in bad_starts:
-            if name_lower.startswith(bad):
-                return False
+        if name_lower.startswith(_BAD_ENTITY_STARTS):
+            return False
 
         # Reject names ending with bad patterns (incomplete parsing)
-        bad_ends = [
-            "_and", "_or", "_but", "_the", "_a", "_an",
-            "_is", "_are", "_was", "_were", "_be",
-            "_has", "_have", "_had", "_do", "_does",
-            "_can", "_will", "_would", "_should",
-            "_to", "_for", "_with", "_from", "_in", "_on", "_at",
-            "_that", "_which", "_who",
-        ]
-        for bad in bad_ends:
-            if name_lower.endswith(bad):
-                return False
+        if name_lower.endswith(_BAD_ENTITY_ENDS):
+            return False
 
         # Reject pure pronouns
-        if name_lower in ["they", "them", "it", "he", "she", "we", "i", "you", "your",
-                          "this", "that", "these", "those", "its", "their"]:
+        if name_lower in _ENTITY_PRONOUNS:
             return False
 
         # Reject if contains verb patterns indicating sentence fragments
         # e.g., "shark_possess_incredible" contains "possess" which is a verb
-        sentence_verbs = [
-            "_possess_", "_possesses_", "_contain_", "_contains_",
-            "_include_", "_includes_", "_provide_", "_provides_",
-            "_cause_", "_causes_", "_create_", "_creates_",
-            "_exist_", "_exists_", "_form_", "_forms_",
-            "_call_", "_calls_", "_called_",
-            "_kill_", "_kills_", "_support_", "_supports_",
-        ]
-        for verb in sentence_verbs:
+        for verb in _ENTITY_SENTENCE_VERBS:
             if verb in name_lower:
                 return False
 
         # Reject if first word is an adverb or modifier that doesn't make sense alone
-        bad_first_words = [
-            "highly", "very", "really", "sometimes", "often", "always",
-            "never", "usually", "incredibly", "extremely", "mostly",
-            "probably", "possibly", "actually", "basically", "generally",
-            "typically", "commonly", "rarely", "frequently", "occasionally",
-            "primarily", "mainly", "largely", "mostly", "particularly",
-        ]
-        if words and words[0] in bad_first_words:
+        if words and words[0] in _ENTITY_BAD_FIRST_WORDS:
             return False
 
         # Reject if last word is a verb or auxiliary
-        bad_last_words = [
-            "is", "are", "was", "were", "be", "been", "being",
-            "has", "have", "had", "do", "does", "did",
-            "can", "could", "will", "would", "should", "may", "might",
-            "believe", "believes", "think", "thinks", "know", "knows",
-            "say", "says", "said", "make", "makes", "made",
-        ]
-        if words and words[-1] in bad_last_words:
+        if words and words[-1] in _ENTITY_BAD_LAST_WORDS:
             return False
 
         # Reject single auxiliary/modal words
-        single_word_rejects = [
-            "will", "would", "could", "should", "may", "might", "must",
-            "shall", "can", "do", "does", "did", "has", "have", "had",
-            "is", "are", "was", "were", "be", "been", "being",
-            "the", "a", "an", "and", "or", "but", "so", "yet",
-        ]
-        if len(words) == 1 and words[0] in single_word_rejects:
+        if len(words) == 1 and words[0] in _ENTITY_SINGLE_WORD_REJECTS:
             return False
 
         # Reject compound patterns that indicate sentence fragments
         # e.g., "scientist_believe", "black_hole_region_spacetime"
-        if len(words) >= 2:
-            # Check for verb as second-to-last or last word in compounds
-            verbs_in_compound = [
-                "believe", "believes", "think", "thinks", "say", "says",
-                "make", "makes", "know", "knows", "see", "sees",
-                "show", "shows", "prove", "proves", "suggest", "suggests",
-                "indicate", "indicates", "reveal", "reveals",
-                "composed", "formed", "named", "called",
-            ]
-            for verb in verbs_in_compound:
-                if verb in words:
-                    return False
+        if len(words) >= 2 and not _ENTITY_COMPOUND_VERBS.isdisjoint(words):
+            return False
 
         return True
 
@@ -1448,7 +1538,7 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         self.recent = []
 
         if hasattr(self, 'inference'):
-            self.inference.inferences = []
+            self.inference.inferences.clear()
             self.inference._recent_inferences = set()
             try:
                 self.storage.clear_inferences()
@@ -1529,7 +1619,7 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
             self.recent = []
 
             if hasattr(self, 'inference'):
-                self.inference.inferences = []
+                self.inference.inferences.clear()
                 self.inference._recent_inferences = set()
 
             # Reset contexts
@@ -1779,19 +1869,19 @@ class Loom(TrainingMixin, DiscoveryMixin, HebbianMixin, ProcessingMixin):
         Returns:
             Loom's response
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         # Create speech provenance
         self._current_speech_provenance = {
             "source_type": "speech",
-            "transcript_id": f"manual_{int(datetime.now().timestamp())}",
+            "transcript_id": f"manual_{int(datetime.now(timezone.utc).timestamp())}",
             "segment_index": 0,
             "segment_text": text,
             "start_time": 0.0,
             "end_time": 0.0,
             "confidence": confidence,
             "speaker_id": speaker_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "premises": [],
             "rule_id": None,
             "derivation_id": None,

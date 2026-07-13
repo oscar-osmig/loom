@@ -9,11 +9,17 @@ load_dotenv()
 from flask import Flask, request, jsonify, send_file
 import json
 import os
+import time
+import threading
 import pathlib
 
 from loom import Loom
 
 app = Flask(__name__, static_folder='static', static_url_path='')
+
+# Reject oversized request bodies (uploads, audio, pasted JSON) before they are
+# read into memory. 16 MB is generous for text training data.
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 
 # ==================== INSTANCE POOL ====================
@@ -24,19 +30,26 @@ class LoomPool:
     def __init__(self, database_name="loom_memory"):
         self._instances = {}
         self._database_name = database_name
+        self._lock = threading.Lock()
 
     def get(self, instance_name="loom"):
-        """Get or create a Loom instance by name."""
-        if instance_name not in self._instances:
-            inst = Loom(
-                name=instance_name,
-                verbose=False,
-                use_mongo=True,
-                database_name=self._database_name,
-            )
-            inst.context.set_knowledge_ref(inst.knowledge)
-            self._instances[instance_name] = inst
-        return self._instances[instance_name]
+        """Get or create a Loom instance by name (thread-safe)."""
+        inst = self._instances.get(instance_name)
+        if inst is not None:
+            return inst
+        with self._lock:
+            # Double-checked: another thread may have built it while we waited.
+            inst = self._instances.get(instance_name)
+            if inst is None:
+                inst = Loom(
+                    name=instance_name,
+                    verbose=False,
+                    use_mongo=True,
+                    database_name=self._database_name,
+                )
+                inst.context.set_knowledge_ref(inst.knowledge)
+                self._instances[instance_name] = inst
+        return inst
 
     def remove(self, instance_name):
         """Remove a cached instance (e.g. after deletion)."""
@@ -65,9 +78,80 @@ def get_loom():
 
 
 def is_admin(email: str) -> bool:
-    """Check if the given email matches the admin email from environment."""
+    """Check whether an email matches the configured admin email.
+
+    NOTE: This is a plain string comparison. It is used only for *display*
+    (e.g. tagging a leaderboard row with an admin badge). It must NOT be used
+    to authorize privileged actions with a client-supplied email — use
+    `verified_admin()` for that, which requires a cryptographically verified
+    Google ID token.
+    """
     admin_email = os.environ.get('ADMIN_EMAIL', '')
     return bool(email and admin_email and email.lower() == admin_email.lower())
+
+
+# Small in-process cache of verified tokens so we don't refetch Google's certs
+# (a network round-trip) on every privileged call. Keyed by the raw token;
+# entries expire at min(token exp, now + 5 min).
+_verified_token_cache: dict = {}
+
+
+def verified_email():
+    """Return the verified email from the request's Bearer ID token, or None.
+
+    Verifies a Google-issued ID token server-side. This is the ONLY trustworthy
+    source of caller identity — never authorize based on an `email` field taken
+    from the request body/query, which any client can forge.
+    """
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+
+    now = time.time()
+    cached = _verified_token_cache.get(token)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    client_id = os.environ.get('google_client_id', '')
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+    except ImportError:
+        app.logger.error("google-auth is not installed; cannot verify ID tokens. "
+                         "Install it to enable admin/ownership actions.")
+        return None
+
+    try:
+        info = google_id_token.verify_oauth2_token(
+            token, google_requests.Request(), client_id or None
+        )
+        if info.get('iss') not in ('accounts.google.com', 'https://accounts.google.com'):
+            return None
+        if not info.get('email_verified', False):
+            return None
+        email = (info.get('email') or '').lower() or None
+    except Exception as e:
+        app.logger.warning(f"ID token verification failed: {e}")
+        email = None
+
+    # Cache the result (positive or negative) briefly; prune if it grows large.
+    exp = float(info.get('exp', now + 300)) if email else now + 30
+    _verified_token_cache[token] = (email, min(exp, now + 300))
+    if len(_verified_token_cache) > 500:
+        for k, (_, e) in list(_verified_token_cache.items()):
+            if e <= now:
+                _verified_token_cache.pop(k, None)
+    return email
+
+
+def verified_admin() -> bool:
+    """True only if the request carries a verified ID token for the admin email."""
+    email = verified_email()
+    admin_email = os.environ.get('ADMIN_EMAIL', '')
+    return bool(email and admin_email and email == admin_email.lower())
 
 
 @app.route('/api/config', methods=['GET'])
@@ -248,10 +332,10 @@ def chat():
         cmd = message[1:].lower().strip()
 
         if cmd == 'help':
-            return jsonify({'response': get_help_text(admin=is_admin(email)), 'type': 'help'})
+            return jsonify({'response': get_help_text(admin=verified_admin()), 'type': 'help'})
 
         elif cmd == 'style':
-            if not is_admin(email):
+            if not verified_admin():
                 return jsonify({'response': 'Permission denied. Only admins can view style data.', 'type': 'error'})
             return jsonify({'response': 'open_style_page', 'type': 'style'})
 
@@ -286,7 +370,7 @@ def chat():
             return jsonify({'response': get_stats(loom), 'type': 'info'})
 
         elif cmd == 'forget-all':
-            if not is_admin(email):
+            if not verified_admin():
                 return jsonify({'response': 'Permission denied. Only admins can erase all memory.', 'type': 'error'})
             try:
                 # Count what exists before wiping
@@ -313,7 +397,7 @@ def chat():
                 return jsonify({'response': 'No user identified. Sign in first.', 'type': 'error'})
 
         elif cmd == 'load-all':
-            if not is_admin(email):
+            if not verified_admin():
                 return jsonify({'response': 'Permission denied. Only admins can load all training files.', 'type': 'error'})
             import glob
             training_dir = os.path.join(os.path.dirname(__file__), 'training')
@@ -387,9 +471,17 @@ def chat():
             return jsonify({'response': 'Available packs: ' + ', '.join(packs), 'type': 'info'})
 
         elif cmd.startswith('load '):
+            if not verified_admin():
+                return jsonify({'response': 'Permission denied. Only admins can load training files.', 'type': 'error'})
             from loom.trainer import train_from_file
-            filepath = cmd[5:].strip()
-            count, msg = train_from_file(loom, filepath)
+            requested = cmd[5:].strip()
+            # Constrain to the training/ directory: no arbitrary/absolute paths,
+            # no traversal outside it.
+            training_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), 'training'))
+            candidate = os.path.realpath(os.path.join(training_dir, os.path.basename(requested)))
+            if os.path.dirname(candidate) != training_dir or not os.path.isfile(candidate):
+                return jsonify({'response': f'File not found in training folder: {os.path.basename(requested)}', 'type': 'error'})
+            count, msg = train_from_file(loom, candidate)
             return jsonify({'response': msg, 'type': 'info'})
 
         else:
@@ -762,9 +854,9 @@ def get_collaborators():
             admin_names.add(admin_email.split('@')[0])
             admin_names.add(admin_email.split('@')[0].replace('.', ' '))
             admin_names.add(admin_email.split('@')[0].replace('.', ''))
-        caller_email = request.args.get('email', '').lower()
+        # Badge the caller as admin only if they present a verified admin token.
         caller_user = request.args.get('user', '')
-        if caller_email and is_admin(caller_email) and caller_user:
+        if caller_user and verified_admin():
             admin_names.add(caller_user.lower())
 
         # Merge all users (filter out None/empty)
@@ -799,8 +891,7 @@ def get_collaborators():
 @app.route('/api/style', methods=['GET'])
 def get_style():
     """Return what Loom has learned about writing style. Admin only."""
-    email = request.args.get('email', '')
-    if not is_admin(email):
+    if not verified_admin():
         return jsonify({'error': 'Admin access required'}), 403
 
     loom = get_loom()
@@ -1182,9 +1273,9 @@ def list_instances():
     """List instances accessible to the current user.
 
     Always includes 'loom' (General). Also returns any personal instances
-    owned by the caller's email.
+    owned by the caller (identified by their verified ID token).
     """
-    email = request.args.get('email', '').strip()
+    email = verified_email()
 
     # General is always present
     instances = [{'instance_name': 'loom', 'display_name': 'General', 'is_personal': False}]
@@ -1212,16 +1303,17 @@ def list_instances():
 def create_instance():
     """Create a personal Loom instance for the authenticated user.
 
-    Expected JSON: { "email": "...", "display_name": "..." }
-    Instance name is derived as "user:<email>:<slug>".
+    Expected JSON: { "display_name": "..." } with a verified ID token.
+    Instance name is derived as "user:<email>:<slug>", where the email comes
+    from the verified token (never the request body).
     Users can create multiple instances.
     """
     data = request.json or {}
-    email = (data.get('email') or '').strip()
+    email = verified_email()
     display_name = (data.get('display_name') or 'Personal').strip()
 
     if not email:
-        return jsonify({'error': 'Email required.'}), 400
+        return jsonify({'error': 'Sign in to create a personal instance.'}), 401
 
     import re
     slug = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')
@@ -1265,15 +1357,18 @@ def create_instance():
 def delete_instance():
     """Delete a personal Loom instance.
 
-    Expected JSON: { "email": "...", "instance_name": "..." }
-    Only the owner can delete their instance. Cannot delete General.
+    Expected JSON: { "instance_name": "..." } with a verified ID token.
+    Only the owner (per the verified token) can delete their instance.
+    Cannot delete General.
     """
     data = request.json or {}
-    email = (data.get('email') or '').strip()
+    email = verified_email()
     instance_name = (data.get('instance_name') or '').strip()
 
-    if not email or not instance_name:
-        return jsonify({'error': 'Email and instance_name required.'}), 400
+    if not email:
+        return jsonify({'error': 'Sign in to delete an instance.'}), 401
+    if not instance_name:
+        return jsonify({'error': 'instance_name required.'}), 400
 
     if instance_name == 'loom':
         return jsonify({'error': 'Cannot delete General instance.'}), 403
