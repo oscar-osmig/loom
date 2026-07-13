@@ -171,6 +171,24 @@ def index():
     return send_file('web_chat.html')
 
 
+@app.after_request
+def spa_cache_headers(resp):
+    """Cache policy for the single-page app.
+
+    The entry HTML (index.html / '/') must always be revalidated so a browser
+    or CDN never serves a stale index.html that references a content-hashed
+    asset which a later deploy has already replaced (that mismatch 404s the
+    CSS/JS). The hashed assets themselves are immutable — their name changes
+    whenever their content does — so they can be cached indefinitely.
+    """
+    path = request.path
+    if path.startswith('/assets/'):
+        resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    elif path == '/' or path.endswith('/index.html'):
+        resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    return resp
+
+
 @app.route('/loom.png')
 def loom_icon():
     """Serve the Loom icon."""
