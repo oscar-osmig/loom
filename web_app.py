@@ -24,6 +24,10 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
 # ==================== INSTANCE POOL ====================
 
+class StorageUnavailable(Exception):
+    """Raised when a Loom instance can't be built (usually MongoDB config)."""
+
+
 class LoomPool:
     """Manages multiple Loom instances, creating them lazily."""
 
@@ -33,7 +37,13 @@ class LoomPool:
         self._lock = threading.Lock()
 
     def get(self, instance_name="loom"):
-        """Get or create a Loom instance by name (thread-safe)."""
+        """Get or create a Loom instance by name (thread-safe).
+
+        Raises StorageUnavailable with a diagnosable message when construction
+        fails — most commonly a bad MONGO_URI (unescaped password characters,
+        a leftover <db_password> placeholder) or Atlas Network Access blocking
+        the server's IP. Without this, every request surfaces as a bare 500.
+        """
         inst = self._instances.get(instance_name)
         if inst is not None:
             return inst
@@ -41,12 +51,18 @@ class LoomPool:
             # Double-checked: another thread may have built it while we waited.
             inst = self._instances.get(instance_name)
             if inst is None:
-                inst = Loom(
-                    name=instance_name,
-                    verbose=False,
-                    use_mongo=True,
-                    database_name=self._database_name,
-                )
+                try:
+                    inst = Loom(
+                        name=instance_name,
+                        verbose=False,
+                        use_mongo=True,
+                        database_name=self._database_name,
+                    )
+                except Exception as e:
+                    app.logger.exception(f"Failed to initialize Loom instance '{instance_name}'")
+                    raise StorageUnavailable(
+                        f"{type(e).__name__}: {str(e)[:200]}"
+                    ) from e
                 inst.context.set_knowledge_ref(inst.knowledge)
                 self._instances[instance_name] = inst
         return inst
@@ -57,6 +73,51 @@ class LoomPool:
 
 
 pool = LoomPool(database_name="loom_memory")
+
+
+@app.errorhandler(StorageUnavailable)
+def handle_storage_unavailable(e):
+    """Turn storage-init failures into an actionable 503 instead of a bare 500."""
+    return jsonify({
+        'error': 'Database connection failed. Check that MONGO_URI is set correctly '
+                 '(special characters in the password must be percent-encoded, e.g. ! -> %21; '
+                 'no <db_password> placeholder) and that MongoDB Atlas Network Access '
+                 "allows this server's IP.",
+        'detail': str(e),
+        'type': 'error',
+    }), 503
+
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    """Report server + database health for deployment debugging.
+
+    Never includes credentials — only the failure class/message.
+    """
+    mongo_uri_set = bool(os.environ.get('MONGO_URI'))
+    try:
+        loom = pool.get('loom')
+        loom.storage.client.admin.command('ping')
+        return jsonify({
+            'status': 'ok',
+            'mongo_uri_set': mongo_uri_set,
+            'database': 'connected',
+            'facts': loom.storage.get_fact_count(),
+        })
+    except StorageUnavailable as e:
+        return jsonify({
+            'status': 'degraded',
+            'mongo_uri_set': mongo_uri_set,
+            'database': 'unavailable',
+            'detail': str(e),
+        }), 503
+    except Exception as e:
+        return jsonify({
+            'status': 'degraded',
+            'mongo_uri_set': mongo_uri_set,
+            'database': 'error',
+            'detail': f"{type(e).__name__}: {str(e)[:200]}",
+        }), 503
 
 
 def get_loom():
