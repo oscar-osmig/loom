@@ -8,6 +8,7 @@
     let wrapperEl = $state(null);
     let signInButtonEl = $state(null);
     let googleRendered = $state(false);
+    let configChecked = $state(false);  // /api/config has resolved (success or not)
 
     function toggleDropdown() {
         dropdownOpen = !dropdownOpen;
@@ -45,9 +46,14 @@
         setSettingsOpen(true);
     }
 
-    function renderGoogleButton() {
+    function renderGoogleButton(attempt = 0) {
         if (!signInButtonEl || !auth.googleClientId || googleRendered) return;
-        if (typeof google === 'undefined' || !google.accounts) return;
+        // The GSI script loads async/deferred, so `google` may not be ready on
+        // the first attempt — retry briefly instead of silently giving up.
+        if (typeof google === 'undefined' || !google.accounts) {
+            if (attempt < 20) setTimeout(() => renderGoogleButton(attempt + 1), 100);
+            return;
+        }
 
         try {
             google.accounts.id.initialize({
@@ -67,11 +73,13 @@
         }
     }
 
-    $effect(() => { initGoogle(); });
+    $effect(() => {
+        initGoogle().finally(() => { configChecked = true; });
+    });
 
     $effect(() => {
         if (dropdownOpen && !isAuthenticated() && auth.googleClientId && signInButtonEl) {
-            setTimeout(renderGoogleButton, 50);
+            setTimeout(() => renderGoogleButton(), 50);
         }
     });
 
@@ -126,10 +134,17 @@
                     </svg>
                     Sign out
                 </button>
-            {:else}
+            {:else if auth.googleClientId}
                 <div class="google-signin-container">
                     <div id="googleSignInButton" bind:this={signInButtonEl}></div>
                 </div>
+            {:else if configChecked}
+                <div class="signin-unavailable">
+                    Google sign-in isn't configured on this server.
+                    <span>Set the <code>google_client_id</code> environment variable to enable it. You can still use Loom by typing a name in the chat.</span>
+                </div>
+            {:else}
+                <div class="signin-unavailable">Loading sign-in…</div>
             {/if}
         </div>
     {/if}
@@ -179,4 +194,17 @@
     .account-dropdown-item svg { flex-shrink: 0; }
 
     .google-signin-container { padding: 0.75rem 1rem; display: flex; justify-content: center; }
+
+    .signin-unavailable {
+        padding: 0.75rem 1rem; font-size: 0.8125rem; font-weight: 600;
+        color: var(--text-secondary); line-height: 1.4;
+    }
+    .signin-unavailable span {
+        display: block; margin-top: 0.375rem;
+        font-size: 0.75rem; font-weight: 400; color: var(--text-muted);
+    }
+    .signin-unavailable code {
+        font-family: monospace; font-size: 0.72rem;
+        background: var(--bg-tertiary); padding: 1px 4px; border-radius: 4px;
+    }
 </style>
